@@ -696,6 +696,14 @@ fun PlaylistItemRow(
     onMove: () -> Unit = {},
     onDelete: () -> Unit
 ) {
+    val hasPlayed = item.lastPlayedTime > 0L
+    val titleColor = when {
+        isCurrent && !isBatchMode -> CyanAccent
+        isSelected -> AmberAccent
+        hasPlayed -> TextSecondary.copy(alpha = 0.85f)
+        else -> TextPrimary
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -729,7 +737,7 @@ fun PlaylistItemRow(
         } else {
             Text(
                 text = "$index",
-                color = TextSecondary,
+                color = if (hasPlayed) TextSecondary.copy(alpha = 0.6f) else TextSecondary,
                 fontSize = 14.sp,
                 modifier = Modifier.width(28.dp)
             )
@@ -738,9 +746,9 @@ fun PlaylistItemRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = item.title,
-                color = if (isCurrent && !isBatchMode) CyanAccent else if (isSelected) AmberAccent else TextPrimary,
+                color = titleColor,
                 fontSize = 15.sp,
-                fontWeight = if (isCurrent || isSelected) FontWeight.Bold else FontWeight.Medium,
+                fontWeight = if (isCurrent || isSelected) FontWeight.Bold else if (hasPlayed) FontWeight.Normal else FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -751,6 +759,14 @@ fun PlaylistItemRow(
                         color = CyanAccent,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                } else if (hasPlayed) {
+                    Text(
+                        text = "[已播過]",
+                        color = TextSecondary.copy(alpha = 0.75f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                 }
@@ -775,6 +791,15 @@ fun PlaylistItemRow(
                 )
             }
         }
+
+        // 總時長標籤
+        Text(
+            text = if (item.durationMs > 0L) formatPlayerTime(item.durationMs) else "--:--",
+            color = if (hasPlayed) TextSecondary.copy(alpha = 0.5f) else TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 6.dp)
+        )
 
         if (!isBatchMode) {
             IconButton(onClick = onMove) {

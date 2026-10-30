@@ -17,7 +17,7 @@ import com.overlord.omnistream.data.local.entity.SubscriptionEntity
 
 @Database(
     entities = [PlaylistItemEntity::class, PlaybackStateEntity::class, SubscriptionEntity::class, PlaylistGroupEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -76,6 +76,36 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                addColumnIfNotExists(db, "playlist_items", "lastPlayedTime", "INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_1_5 = object : Migration(1, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_1_2.migrate(db)
+                MIGRATION_2_3.migrate(db)
+                MIGRATION_3_4.migrate(db)
+                MIGRATION_4_5.migrate(db)
+            }
+        }
+
+        val MIGRATION_2_5 = object : Migration(2, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_2_3.migrate(db)
+                MIGRATION_3_4.migrate(db)
+                MIGRATION_4_5.migrate(db)
+            }
+        }
+
+        val MIGRATION_3_5 = object : Migration(3, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_3_4.migrate(db)
+                MIGRATION_4_5.migrate(db)
+            }
+        }
+
         val MIGRATION_1_3 = object : Migration(1, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 MIGRATION_1_2.migrate(db)
@@ -112,7 +142,11 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_1_3,
                     MIGRATION_3_4,
                     MIGRATION_2_4,
-                    MIGRATION_1_4
+                    MIGRATION_1_4,
+                    MIGRATION_4_5,
+                    MIGRATION_3_5,
+                    MIGRATION_2_5,
+                    MIGRATION_1_5
                 )
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
@@ -122,5 +156,3 @@ abstract class AppDatabase : RoomDatabase() {
         }
     }
 }
-
-

@@ -10,5 +10,6 @@ data class PlaylistItem(
     val artworkUri: String? = null,         // 封面縮圖 URI
     val driveFolderId: String? = null,      // 若為 GDrive 則記錄所屬資料夾
     val ytChannelId: String? = null,        // 若為 YT 則記錄所屬頻道
-    val addedTime: Long = System.currentTimeMillis() // 加入時間戳
+    val addedTime: Long = System.currentTimeMillis(), // 加入時間戳
+    val lastPlayedTime: Long = 0L           // 最後播放時間戳（0 代表尚未播放過）
 )

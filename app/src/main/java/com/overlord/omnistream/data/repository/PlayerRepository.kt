@@ -348,4 +348,16 @@ class PlayerRepository(
             )
         )
     }
+
+    // 紀錄曲目已播放過
+    suspend fun recordTrackPlayed(id: String, timestamp: Long = System.currentTimeMillis()) {
+        playlistDao.updateLastPlayedTime(id, timestamp)
+    }
+
+    // 更新曲目時長 (毫秒)
+    suspend fun updateItemDuration(id: String, durationMs: Long) {
+        if (durationMs > 0L) {
+            playlistDao.updateDuration(id, durationMs)
+        }
+    }
 }

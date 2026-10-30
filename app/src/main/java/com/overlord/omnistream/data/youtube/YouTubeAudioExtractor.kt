@@ -12,7 +12,8 @@ import org.json.JSONObject
 data class YouTubeMediaInfo(
     val audioUrl: String,
     val title: String,
-    val author: String
+    val author: String,
+    val durationMs: Long = 0L
 )
 
 /**
@@ -112,6 +113,8 @@ class YouTubeAudioExtractor(private val client: OkHttpClient = OkHttpClient()) {
 
                     val title = videoDetails?.optString("title").orEmpty().ifBlank { "YouTube 音訊" }
                     val author = videoDetails?.optString("author").orEmpty().ifBlank { "YouTube" }
+                    val lengthSeconds = videoDetails?.optString("lengthSeconds")?.toLongOrNull() ?: 0L
+                    val durationMs = lengthSeconds * 1000L
 
                     // 1. 優先尋找 adaptiveFormats 中的純音訊串流 (Opus / M4A)
                     val adaptiveFormats = streamingData.optJSONArray("adaptiveFormats")
@@ -155,7 +158,8 @@ class YouTubeAudioExtractor(private val client: OkHttpClient = OkHttpClient()) {
                         return@withContext YouTubeMediaInfo(
                             audioUrl = bestAudioUrl,
                             title = title,
-                            author = author
+                            author = author,
+                            durationMs = durationMs
                         )
                     }
                 }

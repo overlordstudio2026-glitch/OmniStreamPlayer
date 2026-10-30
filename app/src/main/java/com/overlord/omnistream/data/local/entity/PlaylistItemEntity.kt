@@ -18,7 +18,8 @@ data class PlaylistItemEntity(
     val ytChannelId: String?,
     val sortOrder: Int,
     val addedTime: Long,
-    val playlistGroupId: String = "default"      // 歸屬的播放清單群組
+    val playlistGroupId: String = "default",      // 歸屬的播放清單群組
+    val lastPlayedTime: Long = 0L                // 最後播放時間戳（0 代表尚未播放）
 ) {
     fun toDomain(): PlaylistItem {
         val safeType = runCatching { MediaSourceType.valueOf(sourceType) }.getOrDefault(MediaSourceType.LOCAL)
@@ -32,10 +33,10 @@ data class PlaylistItemEntity(
             artworkUri = artworkUri,
             driveFolderId = driveFolderId,
             ytChannelId = ytChannelId,
-            addedTime = addedTime
+            addedTime = addedTime,
+            lastPlayedTime = lastPlayedTime
         )
     }
-
 
     companion object {
         fun fromDomain(item: PlaylistItem, sortOrder: Int, groupId: String = "default"): PlaylistItemEntity {
@@ -51,7 +52,8 @@ data class PlaylistItemEntity(
                 ytChannelId = item.ytChannelId,
                 sortOrder = sortOrder,
                 addedTime = item.addedTime,
-                playlistGroupId = groupId
+                playlistGroupId = groupId,
+                lastPlayedTime = item.lastPlayedTime
             )
         }
     }
