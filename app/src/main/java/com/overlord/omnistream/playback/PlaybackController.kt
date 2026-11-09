@@ -43,6 +43,12 @@ class PlaybackController(private val context: Context) {
     private val _durationMs = MutableStateFlow(0L)
     val durationMs = _durationMs.asStateFlow()
 
+    private val _shuffleModeEnabled = MutableStateFlow(false)
+    val shuffleModeEnabled = _shuffleModeEnabled.asStateFlow()
+
+    private val _repeatMode = MutableStateFlow(Player.REPEAT_MODE_OFF)
+    val repeatMode = _repeatMode.asStateFlow()
+
     private val progressRunnable = object : Runnable {
         override fun run() {
             val controller = mediaController
@@ -105,11 +111,21 @@ class PlaybackController(private val context: Context) {
             _durationMs.value = dur
         }
         _currentPositionMs.value = controller.currentPosition.coerceAtLeast(0L)
+        _shuffleModeEnabled.value = controller.shuffleModeEnabled
+        _repeatMode.value = controller.repeatMode
         if (controller.isPlaying) {
             startProgressUpdates()
         }
 
         controller.addListener(object : Player.Listener {
+            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+                _shuffleModeEnabled.value = shuffleModeEnabled
+            }
+
+            override fun onRepeatModeChanged(repeatMode: Int) {
+                _repeatMode.value = repeatMode
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _isPlaying.value = isPlaying
                 if (isPlaying) {
@@ -177,6 +193,24 @@ class PlaybackController(private val context: Context) {
 
     fun skipToNext() = runOnMainThread { mediaController?.seekToNextMediaItem() }
     fun skipToPrevious() = runOnMainThread { mediaController?.seekToPreviousMediaItem() }
+
+    fun toggleShuffle() = runOnMainThread {
+        val controller = mediaController ?: return@runOnMainThread
+        val newState = !controller.shuffleModeEnabled
+        controller.shuffleModeEnabled = newState
+        _shuffleModeEnabled.value = newState
+    }
+
+    fun toggleRepeat() = runOnMainThread {
+        val controller = mediaController ?: return@runOnMainThread
+        val nextMode = when (controller.repeatMode) {
+            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+            else -> Player.REPEAT_MODE_OFF
+        }
+        controller.repeatMode = nextMode
+        _repeatMode.value = nextMode
+    }
 
     fun toggleOrPlayItemAtIndex(items: List<PlaylistItem>, index: Int) {
         runOnMainThread {

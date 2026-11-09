@@ -5,7 +5,9 @@ import android.util.Log
 import com.overlord.omnistream.core.CrashHandler
 import com.overlord.omnistream.core.cache.MediaCacheManager
 import com.overlord.omnistream.data.local.AppDatabase
+import com.overlord.omnistream.data.lyrics.LyricsManager
 import com.overlord.omnistream.data.repository.PlayerRepository
+import com.overlord.omnistream.data.sponsorblock.SponsorBlockManager
 
 class OmniStreamApp : Application() {
 
@@ -15,6 +17,14 @@ class OmniStreamApp : Application() {
 
     val repository: PlayerRepository by lazy {
         PlayerRepository(this, database)
+    }
+
+    val sponsorBlockManager: SponsorBlockManager by lazy {
+        SponsorBlockManager()
+    }
+
+    val lyricsManager: LyricsManager by lazy {
+        LyricsManager()
     }
 
     override fun onCreate() {
@@ -40,5 +50,3 @@ class OmniStreamApp : Application() {
             private set
     }
 }
-
-

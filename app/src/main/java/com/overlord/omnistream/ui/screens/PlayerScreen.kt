@@ -1,5 +1,9 @@
 package com.overlord.omnistream.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -7,9 +11,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.*
@@ -17,12 +25,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.media3.common.Player
+import com.overlord.omnistream.OmniStreamApp
+import com.overlord.omnistream.data.lyrics.LyricLine
 import com.overlord.omnistream.playback.PlaybackController
+import com.overlord.omnistream.ui.components.LyricsView
+import com.overlord.omnistream.ui.components.WavySeekBar
 import com.overlord.omnistream.ui.theme.*
 import java.util.Locale
 
@@ -34,40 +48,52 @@ fun PlayerScreen(
     isPlaying: Boolean,
     onClose: () -> Unit
 ) {
+    val context = LocalContext.current
+    val app = context.applicationContext as OmniStreamApp
+
+    val currentMediaItem by controller.currentMediaItem.collectAsState()
     val currentPosMs by controller.currentPositionMs.collectAsState()
     val durationMs by controller.durationMs.collectAsState()
+    val shuffleModeEnabled by controller.shuffleModeEnabled.collectAsState()
+    val repeatMode by controller.repeatMode.collectAsState()
 
-    var isDragging by remember { mutableStateOf(false) }
-    var dragProgressRatio by remember { mutableFloatStateOf(0f) }
+    var showLyrics by remember { mutableStateOf(false) }
+    var lyricsList by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
+    var isLoadingLyrics by remember { mutableStateOf(false) }
 
-    val currentRatio = if (isDragging) {
-        dragProgressRatio
-    } else if (durationMs > 0L) {
+    // 當前曲目切換時，自動非同步抓取動態同步歌詞 (LRCLIB)
+    LaunchedEffect(currentMediaItem?.mediaId) {
+        val item = currentMediaItem
+        if (item != null) {
+            isLoadingLyrics = true
+            val durSec = if (durationMs > 0L) (durationMs / 1000L).toInt() else 0
+            val t = title.ifEmpty { item.mediaMetadata.title?.toString() ?: "" }
+            val a = artist.ifEmpty { item.mediaMetadata.artist?.toString() ?: "" }
+            lyricsList = app.lyricsManager.fetchLyrics(item.mediaId, t, a, durSec)
+            isLoadingLyrics = false
+        } else {
+            lyricsList = emptyList()
+        }
+    }
+
+    val currentRatio = if (durationMs > 0L) {
         (currentPosMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else {
         0f
-    }
-
-    val displayedPositionMs = if (isDragging && durationMs > 0L) {
-        (dragProgressRatio * durationMs).toLong()
-    } else {
-        currentPosMs
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(BgDark)
-            .padding(horizontal = 24.dp, vertical = 20.dp),
+            .padding(horizontal = 24.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // 頂部下拉拖曳條與導航列（點擊任意處均可收合）
+        // 頂部導航列：下拉關閉與歌詞模式切換
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onClose() }
+            modifier = Modifier.fillMaxWidth()
         ) {
             Box(
                 modifier = Modifier
@@ -75,8 +101,9 @@ fun PlayerScreen(
                     .height(5.dp)
                     .clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
                     .background(TextSecondary.copy(alpha = 0.5f))
+                    .clickable { onClose() }
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -91,40 +118,75 @@ fun PlayerScreen(
                     )
                 }
                 Text(
-                    text = "正在播放（點此收合回清單）",
+                    text = if (showLyrics) "動態同步歌詞" else "正在播放",
                     color = TextSecondary,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium
                 )
-                Spacer(modifier = Modifier.size(32.dp))
+                IconButton(onClick = { showLyrics = !showLyrics }) {
+                    Icon(
+                        imageVector = Icons.Default.Lyrics,
+                        contentDescription = "切換歌詞視圖",
+                        tint = if (showLyrics) CyanAccent else TextSecondary.copy(alpha = 0.7f),
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
             }
         }
 
-        // 封面唱盤視覺（霸王色 Tactical 圓環風格）
+        // 中間內容區域：唱盤視覺 或 動態滾動歌詞
         Box(
             modifier = Modifier
-                .size(240.dp)
-                .clip(CircleShape)
-                .background(CardDark),
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(vertical = 12.dp),
             contentAlignment = Alignment.Center
         ) {
-            Box(
-                modifier = Modifier
-                    .size(210.dp)
-                    .clip(CircleShape)
-                    .background(SurfaceDark),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "OMNI STREAM",
-                    color = CyanAccent,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
-                )
+            AnimatedContent(
+                targetState = showLyrics,
+                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                label = "PlayerCenterContent"
+            ) { isLyricsMode ->
+                if (isLyricsMode) {
+                    LyricsView(
+                        lyrics = lyricsList,
+                        currentPositionMs = currentPosMs,
+                        onSeekTo = { controller.seekTo(it) },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(240.dp)
+                                .clip(CircleShape)
+                                .background(CardDark),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(210.dp)
+                                    .clip(CircleShape)
+                                    .background(SurfaceDark),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "OMNI STREAM",
+                                    color = CyanAccent,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // 標題與創作者
+        // 歌曲標題與創作者資訊
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -135,10 +197,10 @@ fun PlayerScreen(
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = artist.ifEmpty { "無縫跨來源播放" },
                 color = CyanAccent,
@@ -149,30 +211,26 @@ fun PlayerScreen(
             )
         }
 
-        // 播放控制面板與進度時間軸
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 播放控制面板與靈動水波進度時間軸
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Slider(
-                value = currentRatio,
-                onValueChange = {
-                    isDragging = true
-                    dragProgressRatio = it
-                },
-                onValueChangeFinished = {
+            // 靈動流體波浪水波進度條 (Cyberpunk Wavy SeekBar)
+            WavySeekBar(
+                progressRatio = currentRatio,
+                isPlaying = isPlaying,
+                onSeek = { ratio ->
                     if (durationMs > 0L) {
-                        val targetMs = (dragProgressRatio * durationMs).toLong()
+                        val targetMs = (ratio * durationMs).toLong()
                         controller.seekTo(targetMs)
                     }
-                    isDragging = false
                 },
-                colors = SliderDefaults.colors(
-                    thumbColor = CyanAccent,
-                    activeTrackColor = CyanAccent,
-                    inactiveTrackColor = CardDark
-                ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
             )
 
             // 時間文字顯示：目前播放進度 vs 音訊總長度
@@ -183,49 +241,68 @@ fun PlayerScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = formatPlayerTime(displayedPositionMs),
+                    text = formatPlayerTime(currentPosMs),
                     color = TextSecondary,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Text(
                     text = formatPlayerTime(durationMs),
                     color = TextSecondary,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // 控制按鈕群（上一首、快退10s、播放/暫停、快進10s、下一首）
+            // 控制按鈕群（智慧不重複隨機、上一首、快退10s、播放/暫停、快進10s、下一首、循環切換）
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { controller.skipToPrevious() }) {
+                // 智慧隨機播放按鈕
+                IconButton(
+                    onClick = { controller.toggleShuffle() },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Shuffle,
+                        contentDescription = "不重複隨機播放",
+                        tint = if (shuffleModeEnabled) CyanAccent else TextSecondary.copy(alpha = 0.5f),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                IconButton(
+                    onClick = { controller.skipToPrevious() },
+                    modifier = Modifier.size(38.dp)
+                ) {
                     Icon(
                         imageVector = Icons.Default.SkipPrevious,
                         contentDescription = "上一首",
                         tint = TextPrimary,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(28.dp)
                     )
                 }
 
-                IconButton(onClick = { controller.seekRelative(-10000L) }) {
+                IconButton(
+                    onClick = { controller.seekRelative(-10000L) },
+                    modifier = Modifier.size(38.dp)
+                ) {
                     Icon(
                         imageVector = Icons.Default.Replay10,
                         contentDescription = "快退 10 秒",
                         tint = CyanAccent,
-                        modifier = Modifier.size(30.dp)
+                        modifier = Modifier.size(26.dp)
                     )
                 }
 
                 IconButton(
                     onClick = { if (isPlaying) controller.pause() else controller.play() },
                     modifier = Modifier
-                        .size(64.dp)
+                        .size(58.dp)
                         .clip(CircleShape)
                         .background(CyanAccent)
                 ) {
@@ -233,31 +310,52 @@ fun PlayerScreen(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = "播放/暫停",
                         tint = BgDark,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(34.dp)
                     )
                 }
 
-                IconButton(onClick = { controller.seekRelative(10000L) }) {
+                IconButton(
+                    onClick = { controller.seekRelative(10000L) },
+                    modifier = Modifier.size(38.dp)
+                ) {
                     Icon(
                         imageVector = Icons.Default.Forward10,
                         contentDescription = "快進 10 秒",
                         tint = CyanAccent,
-                        modifier = Modifier.size(30.dp)
+                        modifier = Modifier.size(26.dp)
                     )
                 }
 
-                IconButton(onClick = { controller.skipToNext() }) {
+                IconButton(
+                    onClick = { controller.skipToNext() },
+                    modifier = Modifier.size(38.dp)
+                ) {
                     Icon(
                         imageVector = Icons.Default.SkipNext,
                         contentDescription = "下一首",
                         tint = TextPrimary,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                // 循環模式切換按鈕
+                IconButton(
+                    onClick = { controller.toggleRepeat() },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    val repeatIcon = if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat
+                    val isRepeatActive = repeatMode != Player.REPEAT_MODE_OFF
+                    Icon(
+                        imageVector = repeatIcon,
+                        contentDescription = "循環播放",
+                        tint = if (isRepeatActive) CyanAccent else TextSecondary.copy(alpha = 0.5f),
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(10.dp))
     }
 }
 
@@ -268,7 +366,7 @@ fun formatPlayerTime(ms: Long): String {
     val minutes = (totalSeconds / 60) % 60
     val hours = totalSeconds / 3600
     return if (hours > 0) {
-        String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
+        String.format(Locale.getDefault(), "%d:%02d:%02d", hours, seconds)
     } else {
         String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
     }

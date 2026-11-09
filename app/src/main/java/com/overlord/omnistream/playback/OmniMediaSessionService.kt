@@ -46,8 +46,10 @@ class OmniMediaSessionService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
     private lateinit var exoPlayer: ExoPlayer
+    private lateinit var crossfadeManager: CrossfadeManager
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
     private var progressTrackerJob: Job? = null
+    private var lastProgressSaveTime = 0L
 
     // 螢幕關閉時防止 CPU 深度休眠與 Wi-Fi 降頻的喚醒鎖
     private var wakeLock: PowerManager.WakeLock? = null
@@ -175,9 +177,20 @@ class OmniMediaSessionService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_NETWORK) // 鎖屏時保持網路與 CPU 運作
             .build()
 
+        crossfadeManager = CrossfadeManager(exoPlayer, serviceScope)
+
         // 3. 監聽播放進度以支援跨啟動斷點續播、已播過記錄、時長同步與關閉螢幕連續播放
         exoPlayer.addListener(object : Player.Listener {
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                if (!timeline.isEmpty) {
+                    val count = exoPlayer.mediaItemCount
+                    val currentIndex = exoPlayer.currentMediaItemIndex
+                    exoPlayer.setShuffleOrder(BetterShuffleOrder(count, currentIndex))
+                }
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                crossfadeManager.onTrackTransition()
                 saveCurrentPlaybackProgress()
                 updateLocks()
                 if (mediaItem == null) return
@@ -188,6 +201,12 @@ class OmniMediaSessionService : MediaSessionService() {
                 // 1. 記錄曲目已播放過
                 serviceScope.launch(Dispatchers.IO) {
                     app.repository.recordTrackPlayed(currentId)
+                }
+
+                // 2. 獲取 YouTube SponsorBlock 業配片段
+                if (currentId.startsWith("yt_")) {
+                    val vid = com.overlord.omnistream.data.youtube.YouTubeAudioExtractor.extractVideoId(currentId)
+                    app.sponsorBlockManager.fetchSegments(vid)
                 }
 
                 // 2. 檢查 YouTube 直鏈是否為網頁網址、空白、或已過期
@@ -385,8 +404,31 @@ class OmniMediaSessionService : MediaSessionService() {
         progressTrackerJob?.cancel()
         progressTrackerJob = serviceScope.launch {
             while (isActive) {
-                delay(3000)
-                saveCurrentPlaybackProgress()
+                delay(500)
+                val currentItem = exoPlayer.currentMediaItem
+                if (currentItem != null && exoPlayer.isPlaying) {
+                    val currentPos = exoPlayer.currentPosition
+                    val dur = exoPlayer.duration
+
+                    // 1. SponsorBlock 自動跳過業配
+                    if (currentItem.mediaId.startsWith("yt_")) {
+                        val vid = com.overlord.omnistream.data.youtube.YouTubeAudioExtractor.extractVideoId(currentItem.mediaId)
+                        val skipTarget = (applicationContext as OmniStreamApp).sponsorBlockManager.checkSkipTarget(vid, currentPos)
+                        if (skipTarget != null) {
+                            android.util.Log.i("OmniSessionService", "SponsorBlock skipping from $currentPos to $skipTarget")
+                            exoPlayer.seekTo(skipTarget)
+                        }
+                    }
+
+                    // 2. DJ 級淡入淡出進度跟隨
+                    crossfadeManager.onPlaybackProgress(currentPos, dur)
+                }
+
+                val now = System.currentTimeMillis()
+                if (now - lastProgressSaveTime >= 3000L) {
+                    lastProgressSaveTime = now
+                    saveCurrentPlaybackProgress()
+                }
             }
         }
     }
