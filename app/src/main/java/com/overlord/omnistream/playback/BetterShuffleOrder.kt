@@ -42,54 +42,41 @@ class BetterShuffleOrder(
     override fun getFirstIndex(): Int = if (shuffled.isNotEmpty()) shuffled[0] else C.INDEX_UNSET
 
     override fun cloneAndInsert(insertionIndex: Int, insertionCount: Int): ShuffleOrder {
-        if (shuffled.isEmpty()) {
-            return BetterShuffleOrder(insertionCount, -1)
-        }
+        val newLength = shuffled.size + insertionCount
+        if (newLength <= 0) return BetterShuffleOrder(0, -1)
 
-        val newShuffled = IntArray(shuffled.size + insertionCount)
-        val pivot: Int = if (insertionIndex < shuffled.size && insertionIndex >= 0) {
-            indexInShuffled[insertionIndex]
-        } else {
-            indexInShuffled.size
-        }
+        val newShuffled = IntArray(newLength)
+        val inserted = (insertionIndex until insertionIndex + insertionCount).toList().shuffled()
+        val oldAdjusted = shuffled.map { if (it >= insertionIndex) it + insertionCount else it }
 
-        for (i in shuffled.indices) {
-            var currentIndex = shuffled[i]
-            if (currentIndex >= insertionIndex) {
-                currentIndex += insertionCount
-            }
+        var oldPtr = 0
+        var newPtr = 0
+        val insertionStep = if (inserted.isNotEmpty()) (newLength / inserted.size).coerceAtLeast(1) else 1
 
-            if (i <= pivot) {
-                newShuffled[i] = currentIndex
-            } else {
-                newShuffled[i + insertionCount] = currentIndex
+        for (i in 0 until newLength) {
+            if (newPtr < inserted.size && (i % insertionStep == 0 || oldPtr >= oldAdjusted.size)) {
+                newShuffled[i] = inserted[newPtr++]
+            } else if (oldPtr < oldAdjusted.size) {
+                newShuffled[i] = oldAdjusted[oldPtr++]
+            } else if (newPtr < inserted.size) {
+                newShuffled[i] = inserted[newPtr++]
             }
         }
-
-        for (i in 0 until insertionCount) {
-            newShuffled[pivot + i + 1] = insertionIndex + i
-        }
-
         return BetterShuffleOrder(newShuffled)
     }
 
     override fun cloneAndRemove(indexFrom: Int, indexToExclusive: Int): ShuffleOrder {
-        val numberOfElementsToRemove = indexToExclusive - indexFrom
-        val newShuffled = IntArray(shuffled.size - numberOfElementsToRemove)
-        var foundElementsCount = 0
-        for (i in shuffled.indices) {
-            if (shuffled[i] in indexFrom until indexToExclusive) {
-                foundElementsCount++
-            } else {
-                newShuffled[i - foundElementsCount] =
-                    if (shuffled[i] >= indexFrom) {
-                        shuffled[i] - numberOfElementsToRemove
-                    } else {
-                        shuffled[i]
-                    }
+        val numberOfElementsToRemove = (indexToExclusive - indexFrom).coerceAtLeast(0)
+        val newLength = (shuffled.size - numberOfElementsToRemove).coerceAtLeast(0)
+        if (newLength == 0) return BetterShuffleOrder(0, -1)
+
+        val newShuffled = mutableListOf<Int>()
+        for (idx in shuffled) {
+            if (idx !in indexFrom until indexToExclusive) {
+                newShuffled.add(if (idx >= indexToExclusive) idx - numberOfElementsToRemove else idx)
             }
         }
-        return BetterShuffleOrder(newShuffled)
+        return BetterShuffleOrder(newShuffled.toIntArray())
     }
 
     override fun cloneAndClear(): ShuffleOrder = BetterShuffleOrder(0, -1)

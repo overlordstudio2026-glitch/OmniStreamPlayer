@@ -181,8 +181,8 @@ class OmniMediaSessionService : MediaSessionService() {
 
         // 3. 監聽播放進度以支援跨啟動斷點續播、已播過記錄、時長同步與關閉螢幕連續播放
         exoPlayer.addListener(object : Player.Listener {
-            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
-                if (!timeline.isEmpty) {
+            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+                if (shuffleModeEnabled && exoPlayer.mediaItemCount > 0) {
                     val count = exoPlayer.mediaItemCount
                     val currentIndex = exoPlayer.currentMediaItemIndex
                     exoPlayer.setShuffleOrder(BetterShuffleOrder(count, currentIndex))
