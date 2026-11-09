@@ -206,7 +206,9 @@ class OmniMediaSessionService : MediaSessionService() {
                 // 2. 獲取 YouTube SponsorBlock 業配片段
                 if (currentId.startsWith("yt_")) {
                     val vid = com.overlord.omnistream.data.youtube.YouTubeAudioExtractor.extractVideoId(currentId)
-                    app.sponsorBlockManager.fetchSegments(vid)
+                    serviceScope.launch(Dispatchers.IO) {
+                        app.sponsorBlockManager.fetchSegments(vid)
+                    }
                 }
 
                 // 2. 檢查 YouTube 直鏈是否為網頁網址、空白、或已過期

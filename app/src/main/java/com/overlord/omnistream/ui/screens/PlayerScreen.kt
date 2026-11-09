@@ -66,7 +66,7 @@ fun PlayerScreen(
         val item = currentMediaItem
         if (item != null) {
             isLoadingLyrics = true
-            val durSec = if (durationMs > 0L) (durationMs / 1000L).toInt() else 0
+            val durSec = if (durationMs > 0L) (durationMs / 1000L) else 0L
             val t = title.ifEmpty { item.mediaMetadata.title?.toString() ?: "" }
             val a = artist.ifEmpty { item.mediaMetadata.artist?.toString() ?: "" }
             lyricsList = app.lyricsManager.fetchLyrics(item.mediaId, t, a, durSec)
