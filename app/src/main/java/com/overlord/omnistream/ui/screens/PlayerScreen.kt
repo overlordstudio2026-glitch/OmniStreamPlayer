@@ -5,9 +5,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -33,9 +35,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import com.overlord.omnistream.OmniStreamApp
+import com.overlord.omnistream.core.cache.ImageCacheManager
 import com.overlord.omnistream.data.lyrics.LyricLine
 import com.overlord.omnistream.playback.PlaybackController
 import com.overlord.omnistream.ui.components.LyricsView
+import com.overlord.omnistream.ui.components.TrackThumbnail
 import com.overlord.omnistream.ui.components.WavySeekBar
 import com.overlord.omnistream.ui.theme.*
 import java.util.Locale
@@ -132,29 +136,68 @@ fun PlayerScreen(
                         modifier = Modifier.size(32.dp)
                     )
                 }
-                Text(
-                    text = if (showLyrics) "動態同步歌詞" else "正在播放",
-                    color = TextSecondary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                IconButton(onClick = { showLyrics = !showLyrics }) {
-                    Icon(
-                        imageVector = Icons.Default.Lyrics,
-                        contentDescription = "切換歌詞視圖",
-                        tint = if (showLyrics) CyanAccent else TextSecondary.copy(alpha = 0.7f),
-                        modifier = Modifier.size(26.dp)
-                    )
+
+                // 明確的「封面 | 動態歌詞」膠囊分段切換鈕
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(CardDark)
+                        .border(1.dp, CyanAccent.copy(alpha = 0.25f), RoundedCornerShape(20.dp))
+                        .padding(3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(if (!showLyrics) CyanAccent else CardDark)
+                            .clickable { showLyrics = false }
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "封面",
+                            color = if (!showLyrics) BgDark else TextSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(if (showLyrics) CyanAccent else CardDark)
+                            .clickable { showLyrics = true }
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val lyricsLabel = when {
+                            isLoadingLyrics -> "歌詞..."
+                            lyricsList.isNotEmpty() -> "歌詞 (${lyricsList.size})"
+                            else -> "歌詞"
+                        }
+                        Text(
+                            text = lyricsLabel,
+                            color = if (showLyrics) BgDark else if (lyricsList.isNotEmpty()) CyanAccent else TextSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
+
+                Spacer(modifier = Modifier.size(48.dp)) // 與左側收合鈕平衡置中
             }
         }
 
-        // 中間內容區域：唱盤視覺 或 動態滾動歌詞
+        // 中間內容區域：大封面唱盤視覺 或 動態滾動歌詞
+        val artworkUrl = ImageCacheManager.resolveArtworkUrl(
+            mediaId = currentMediaItem?.mediaId,
+            artworkUri = currentMediaItem?.mediaMetadata?.artworkUri?.toString(),
+            highQuality = true
+        )
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .padding(vertical = 12.dp),
+                .padding(vertical = 10.dp),
             contentAlignment = Alignment.Center
         ) {
             AnimatedContent(
@@ -163,39 +206,81 @@ fun PlayerScreen(
                 label = "PlayerCenterContent"
             ) { isLyricsMode ->
                 if (isLyricsMode) {
-                    LyricsView(
-                        lyrics = lyricsList,
-                        currentPositionMs = currentPosMs,
-                        onSeekTo = { controller.seekTo(it) },
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    if (isLoadingLyrics) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(color = CyanAccent, modifier = Modifier.size(32.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "正在搜尋雲端同步歌詞...",
+                                color = TextSecondary,
+                                fontSize = 13.sp
+                            )
+                        }
+                    } else {
+                        LyricsView(
+                            lyrics = lyricsList,
+                            currentPositionMs = currentPosMs,
+                            onSeekTo = { controller.seekTo(it) },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 } else {
-                    Box(
+                    Column(
                         modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(240.dp)
+                                .size(244.dp)
                                 .clip(CircleShape)
-                                .background(CardDark),
+                                .background(CardDark)
+                                .border(2.dp, CyanAccent.copy(alpha = 0.35f), CircleShape)
+                                .clickable { showLyrics = true },
                             contentAlignment = Alignment.Center
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(210.dp)
-                                    .clip(CircleShape)
-                                    .background(SurfaceDark),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "OMNI STREAM",
-                                    color = CyanAccent,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold
+                            if (artworkUrl != null) {
+                                TrackThumbnail(
+                                    artworkUrl = artworkUrl,
+                                    modifier = Modifier.size(224.dp),
+                                    sizePx = 560,
+                                    isCircular = true,
+                                    iconSize = 64.dp
                                 )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(214.dp)
+                                        .clip(CircleShape)
+                                        .background(SurfaceDark),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "OMNI STREAM",
+                                        color = CyanAccent,
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        val hintText = when {
+                            isLoadingLyrics -> "⏳ 正在比對動態歌詞..."
+                            lyricsList.isNotEmpty() -> "✨ 已匹配同步歌詞 · 點擊封面或上方「歌詞」查看"
+                            else -> "點擊「歌詞」切換動態歌詞模式（純音樂歌曲適用）"
+                        }
+                        Text(
+                            text = hintText,
+                            color = if (lyricsList.isNotEmpty()) CyanAccent.copy(alpha = 0.85f) else TextSecondary.copy(alpha = 0.7f),
+                            fontSize = 11.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.clickable { showLyrics = true }
+                        )
                     }
                 }
             }

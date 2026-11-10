@@ -268,15 +268,21 @@ class PlaybackController(private val context: Context) {
         runOnMainThread {
             val controller = mediaController ?: return@runOnMainThread
             val mediaItems = items.map { item ->
+                val resolvedArtUrl = com.overlord.omnistream.core.cache.ImageCacheManager.resolveArtworkUrl(
+                    mediaId = item.id,
+                    artworkUri = item.artworkUri,
+                    highQuality = true
+                )
+                val metaBuilder = MediaMetadata.Builder()
+                    .setTitle(item.title)
+                    .setArtist(item.artist)
+                if (!resolvedArtUrl.isNullOrBlank()) {
+                    metaBuilder.setArtworkUri(android.net.Uri.parse(resolvedArtUrl))
+                }
                 MediaItem.Builder()
                     .setMediaId(item.id)
                     .setUri(item.mediaUri)
-                    .setMediaMetadata(
-                        MediaMetadata.Builder()
-                            .setTitle(item.title)
-                            .setArtist(item.artist)
-                            .build()
-                    )
+                    .setMediaMetadata(metaBuilder.build())
                     .build()
             }
             _currentPositionMs.value = startPositionMs

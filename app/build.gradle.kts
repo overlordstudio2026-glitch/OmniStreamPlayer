@@ -31,8 +31,8 @@ android {
         applicationId = "com.overlord.omnistream.v3"
         minSdk = 26
         targetSdk = 34
-        versionCode = 202611101
-        versionName = "20261110_1125"
+        versionCode = 202611102
+        versionName = "20261110_1805"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -103,6 +103,9 @@ dependencies {
 
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // Image Loading (Coil with LRU Cache & Downsampling)
+    implementation("io.coil-kt:coil-compose:2.6.0")
 
     // Coroutines & OkHttp
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")

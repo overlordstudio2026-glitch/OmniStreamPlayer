@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.overlord.omnistream.core.cache.ImageCacheManager
 import com.overlord.omnistream.playback.PlaybackController
 import com.overlord.omnistream.ui.theme.CardDark
 import com.overlord.omnistream.ui.theme.CyanAccent
@@ -37,6 +38,7 @@ fun MiniPlayerBar(
     artist: String,
     onClick: () -> Unit
 ) {
+    val currentItem by controller.currentMediaItem.collectAsState()
     val currentPosMs by controller.currentPositionMs.collectAsState()
     val durationMs by controller.durationMs.collectAsState()
     val progress = if (durationMs > 0L) {
@@ -44,6 +46,11 @@ fun MiniPlayerBar(
     } else {
         0f
     }
+    val artworkUrl = ImageCacheManager.resolveArtworkUrl(
+        mediaId = currentItem?.mediaId,
+        artworkUri = currentItem?.mediaMetadata?.artworkUri?.toString(),
+        highQuality = false
+    )
 
     Column(
         modifier = Modifier
@@ -59,6 +66,15 @@ fun MiniPlayerBar(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            TrackThumbnail(
+                artworkUrl = artworkUrl,
+                modifier = Modifier.size(42.dp),
+                sizePx = 128,
+                cornerRadius = 8.dp,
+                iconSize = 20.dp
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title.ifEmpty { "尚未播放曲目" },

@@ -1,5 +1,6 @@
 package com.overlord.omnistream.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -25,14 +27,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.overlord.omnistream.core.cache.ImageCacheManager
 import com.overlord.omnistream.core.model.MediaSourceType
 import com.overlord.omnistream.core.model.PlaylistItem
 import com.overlord.omnistream.data.local.entity.PlaylistGroupEntity
+import com.overlord.omnistream.ui.components.TrackThumbnail
 import com.overlord.omnistream.ui.theme.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun PlaylistScreen(
@@ -79,6 +87,12 @@ fun PlaylistScreen(
     var targetMoveItemId by remember { mutableStateOf("") }
     var targetMoveItemTitle by remember { mutableStateOf("") }
     var showBatchMoveDialog by remember { mutableStateOf(false) }
+
+    // 縮圖快取清理狀態
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var showCacheCleanDialog by remember { mutableStateOf(false) }
+    var cacheSizeLabel by remember { mutableStateOf("計算中...") }
 
     val currentGroupName = groups.find { it.id == selectedGroupId }?.name ?: "預設清單"
 
@@ -223,6 +237,27 @@ fun PlaylistScreen(
                             }
                         )
                     }
+                    HorizontalDivider(color = SurfaceDark)
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CleaningServices, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("清理縮圖快取", color = TextSecondary)
+                            }
+                        },
+                        onClick = {
+                            isDropdownExpanded = false
+                            cacheSizeLabel = "計算中..."
+                            showCacheCleanDialog = true
+                            scope.launch(Dispatchers.IO) {
+                                val sizeStr = ImageCacheManager.getFormattedCacheSize(context)
+                                withContext(Dispatchers.Main) {
+                                    cacheSizeLabel = sizeStr
+                                }
+                            }
+                        }
+                    )
                 }
             }
 
@@ -681,6 +716,46 @@ fun PlaylistScreen(
             containerColor = CardDark
         )
     }
+
+    // 清理縮圖快取對話框
+    if (showCacheCleanDialog) {
+        AlertDialog(
+            onDismissRequest = { showCacheCleanDialog = false },
+            title = { Text("縮圖快取管理", color = TextPrimary) },
+            text = {
+                Text(
+                    text = "目前本機縮圖快取佔用：$cacheSizeLabel\n\n" +
+                        "防卡頓與定期清理策略：\n" +
+                        "• 磁碟上限 50 MB（超標時自動 LRU 淘汰舊圖）\n" +
+                        "• 清單列表強制降採樣以降低記憶體佔用\n" +
+                        "• 系統每 14 天自動定期清理過期快取\n\n" +
+                        "是否立即手動清除全部縮圖快取？",
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCacheCleanDialog = false
+                        scope.launch {
+                            val freed = ImageCacheManager.clearAllCache(context)
+                            Toast.makeText(context, "✨ 已清理縮圖快取（釋放 $freed）", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanAccent)
+                ) {
+                    Text("立即清理", color = BgDark)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCacheCleanDialog = false }) {
+                    Text("關閉", color = TextSecondary)
+                }
+            },
+            containerColor = CardDark
+        )
+    }
 }
 
 @Composable
@@ -703,6 +778,13 @@ fun PlaylistItemRow(
         hasPlayed -> TextSecondary.copy(alpha = 0.85f)
         else -> TextPrimary
     }
+    val artworkUrl = remember(item.id, item.artworkUri) {
+        ImageCacheManager.resolveArtworkUrl(
+            mediaId = item.id,
+            artworkUri = item.artworkUri,
+            highQuality = false
+        )
+    }
 
     Row(
         modifier = Modifier
@@ -715,7 +797,7 @@ fun PlaylistItemRow(
             )
             .background(if (isSelected) SurfaceDark.copy(alpha = 0.9f) else if (isCurrent && !isBatchMode) SurfaceDark else CardDark)
             .clickable { onClick() }
-            .padding(12.dp),
+            .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (isBatchMode) {
@@ -731,17 +813,27 @@ fun PlaylistItemRow(
                 contentDescription = if (isPlaying) "播放中" else "已暫停",
                 tint = CyanAccent,
                 modifier = Modifier
-                    .width(28.dp)
-                    .size(20.dp)
+                    .width(24.dp)
+                    .size(18.dp)
             )
         } else {
             Text(
                 text = "$index",
                 color = if (hasPlayed) TextSecondary.copy(alpha = 0.6f) else TextSecondary,
-                fontSize = 14.sp,
-                modifier = Modifier.width(28.dp)
+                fontSize = 13.sp,
+                modifier = Modifier.width(24.dp)
             )
         }
+
+        TrackThumbnail(
+            artworkUrl = artworkUrl,
+            sourceType = item.sourceType,
+            modifier = Modifier.size(44.dp),
+            sizePx = 160,
+            cornerRadius = 8.dp,
+            iconSize = 20.dp
+        )
+        Spacer(modifier = Modifier.width(10.dp))
 
         Column(modifier = Modifier.weight(1f)) {
             Text(

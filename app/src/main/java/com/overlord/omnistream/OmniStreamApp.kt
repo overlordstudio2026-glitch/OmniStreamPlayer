@@ -2,14 +2,25 @@ package com.overlord.omnistream
 
 import android.app.Application
 import android.util.Log
+import coil.ImageLoader
+import coil.ImageLoaderFactory
 import com.overlord.omnistream.core.CrashHandler
+import com.overlord.omnistream.core.cache.ImageCacheManager
 import com.overlord.omnistream.core.cache.MediaCacheManager
 import com.overlord.omnistream.data.local.AppDatabase
 import com.overlord.omnistream.data.lyrics.LyricsManager
 import com.overlord.omnistream.data.repository.PlayerRepository
 import com.overlord.omnistream.data.sponsorblock.SponsorBlockManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
-class OmniStreamApp : Application() {
+class OmniStreamApp : Application(), ImageLoaderFactory {
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override fun newImageLoader(): ImageLoader = ImageCacheManager.getImageLoader(this)
 
     val database: AppDatabase by lazy {
         AppDatabase.getInstance(this)
@@ -39,6 +50,9 @@ class OmniStreamApp : Application() {
             database
             repository
             MediaCacheManager.init(this)
+            appScope.launch {
+                ImageCacheManager.pruneIfNeeded(this@OmniStreamApp)
+            }
         } catch (t: Throwable) {
             Log.e("OmniStreamApp", "Fatal initialization error during startup", t)
             CrashHandler.showCrash(this, t)
