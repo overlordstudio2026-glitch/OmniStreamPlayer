@@ -1,5 +1,6 @@
 package com.overlord.omnistream.ui.screens
 
+import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -8,6 +9,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -42,11 +45,13 @@ import coil.request.ImageRequest
 import com.overlord.omnistream.OmniStreamApp
 import com.overlord.omnistream.core.cache.ImageCacheManager
 import com.overlord.omnistream.data.lyrics.LyricLine
+import com.overlord.omnistream.data.lyrics.LyricsCandidate
 import com.overlord.omnistream.playback.PlaybackController
 import com.overlord.omnistream.ui.components.LyricsView
 import com.overlord.omnistream.ui.components.TrackThumbnail
 import com.overlord.omnistream.ui.components.WavySeekBar
 import com.overlord.omnistream.ui.theme.*
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 @Composable
@@ -69,8 +74,28 @@ fun PlayerScreen(
     var showLyrics by remember { mutableStateOf(false) }
     var lyricsList by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var isLoadingLyrics by remember { mutableStateOf(false) }
+    var lyricsReloadNonce by remember { mutableIntStateOf(0) }
 
+    val coroutineScope = rememberCoroutineScope()
     val activeMediaId = currentMediaItem?.mediaId
+
+    // 單曲時間偏移記憶與自由閱讀/打軸模式狀態
+    var lyricsOffsetMs by remember(activeMediaId) {
+        mutableLongStateOf(
+            if (!activeMediaId.isNullOrBlank()) app.lyricsManager.getOffsetMs(context, activeMediaId) else 0L
+        )
+    }
+    var autoScrollEnabled by remember { mutableStateOf(true) }
+    var isTapSyncMode by remember(activeMediaId) { mutableStateOf(false) }
+    var tapSyncTargetIndex by remember(activeMediaId) { mutableIntStateOf(0) }
+    var tapSyncDraft by remember(activeMediaId) { mutableStateOf<List<LyricLine>>(emptyList()) }
+
+    // 候選版本歌詞搜尋彈窗狀態
+    var showSearchDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchingCandidates by remember { mutableStateOf(false) }
+    var candidates by remember { mutableStateOf<List<LyricsCandidate>>(emptyList()) }
+
     // 直接訂閱 Room 資料庫取得該曲目的即時最新 Metadata（包含剛同步完的雲端 lyricsUri 與 artworkUri）
     val dbItem by remember(activeMediaId) {
         if (!activeMediaId.isNullOrBlank()) {
@@ -83,7 +108,7 @@ fun PlayerScreen(
     val effectiveLyricsUri = dbItem?.lyricsUri ?: currentMediaItem?.mediaMetadata?.extras?.getString("LYRICS_URI")
 
     // 當前曲目切換、取得總時長、或資料庫剛同步新歌詞 URI 時，立即自動非同步抓取動態同步歌詞
-    LaunchedEffect(activeMediaId, effectiveLyricsUri, durationMs > 0L) {
+    LaunchedEffect(activeMediaId, effectiveLyricsUri, durationMs > 0L, lyricsReloadNonce) {
         val item = currentMediaItem
         val targetId = activeMediaId
         if (item != null && !targetId.isNullOrBlank()) {
@@ -299,11 +324,200 @@ fun PlayerScreen(
                             }
                         } else {
                             LyricsView(
-                                lyrics = lyricsList,
+                                lyrics = if (isTapSyncMode) tapSyncDraft else lyricsList,
                                 currentPositionMs = currentPosMs,
                                 onSeekTo = { controller.seekTo(it) },
-                                modifier = Modifier.fillMaxSize()
+                                modifier = Modifier.fillMaxSize(),
+                                offsetMs = lyricsOffsetMs,
+                                autoScrollEnabled = autoScrollEnabled,
+                                isTapSyncMode = isTapSyncMode,
+                                tapSyncTargetIndex = tapSyncTargetIndex,
+                                onSelectTapSyncLine = { tapSyncTargetIndex = it }
                             )
+
+                            // 歌詞底部懸浮調校控制列（±0.5s 偏移記憶 + 跟隨鎖定 + 邊聽邊打軸 + 換詞搜尋）
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .fillMaxWidth()
+                                    .padding(8.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(BgDark.copy(alpha = 0.88f))
+                                    .border(1.dp, CyanAccent.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                if (isTapSyncMode) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Button(
+                                            onClick = {
+                                                if (tapSyncTargetIndex in tapSyncDraft.indices) {
+                                                    val updated = tapSyncDraft.toMutableList()
+                                                    updated[tapSyncTargetIndex] = updated[tapSyncTargetIndex].copy(timestampMs = currentPosMs)
+                                                    tapSyncDraft = updated
+                                                    if (tapSyncTargetIndex < updated.lastIndex) {
+                                                        tapSyncTargetIndex += 1
+                                                    } else {
+                                                        Toast.makeText(context, "已到最後一句，請點擊「儲存」完成校準！", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = AmberAccent),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier.weight(1.4f).height(34.dp)
+                                        ) {
+                                            Text(
+                                                text = "同步 #${tapSyncTargetIndex + 1}",
+                                                color = BgDark,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                if (tapSyncTargetIndex > 0) tapSyncTargetIndex -= 1
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                            modifier = Modifier.height(34.dp)
+                                        ) {
+                                            Text("上句", color = TextSecondary, fontSize = 11.sp)
+                                        }
+                                        Button(
+                                            onClick = {
+                                                val id = activeMediaId
+                                                if (!id.isNullOrBlank() && tapSyncDraft.isNotEmpty()) {
+                                                    app.lyricsManager.saveCustomSyncedLrc(context, id, tapSyncDraft)
+                                                    app.lyricsManager.saveOffsetMs(context, id, 0L)
+                                                    lyricsOffsetMs = 0L
+                                                    lyricsList = tapSyncDraft.sortedBy { it.timestampMs }
+                                                    isTapSyncMode = false
+                                                    Toast.makeText(context, "✅ 已儲存本首自訂打軸歌詞！", Toast.LENGTH_SHORT).show()
+                                                }
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier.height(34.dp)
+                                        ) {
+                                            Text("儲存", color = BgDark, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        TextButton(
+                                            onClick = { isTapSyncMode = false },
+                                            contentPadding = PaddingValues(horizontal = 6.dp),
+                                            modifier = Modifier.height(34.dp)
+                                        ) {
+                                            Text("取消", color = RedAccent, fontSize = 11.sp)
+                                        }
+                                    }
+                                } else {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // 1. 偏移微調 (-0.5s / 偏移顯示 / +0.5s)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(CardDark)
+                                                    .clickable {
+                                                        val nextOffset = (lyricsOffsetMs - 500L).coerceIn(-30000L, 30000L)
+                                                        lyricsOffsetMs = nextOffset
+                                                        activeMediaId?.let { app.lyricsManager.saveOffsetMs(context, it, nextOffset) }
+                                                    }
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                            ) {
+                                                Text("-0.5s", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                                            }
+                                            val offsetSec = lyricsOffsetMs / 1000.0
+                                            Text(
+                                                text = if (lyricsOffsetMs == 0L) "0.0s" else String.format(Locale.US, "%+.1fs", offsetSec),
+                                                color = if (lyricsOffsetMs != 0L) CyanAccent else TextSecondary,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier
+                                                    .clickable {
+                                                        lyricsOffsetMs = 0L
+                                                        activeMediaId?.let { app.lyricsManager.saveOffsetMs(context, it, 0L) }
+                                                    }
+                                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(CardDark)
+                                                    .clickable {
+                                                        val nextOffset = (lyricsOffsetMs + 500L).coerceIn(-30000L, 30000L)
+                                                        lyricsOffsetMs = nextOffset
+                                                        activeMediaId?.let { app.lyricsManager.saveOffsetMs(context, it, nextOffset) }
+                                                    }
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                            ) {
+                                                Text("+0.5s", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                                            }
+                                        }
+
+                                        // 2. 自動跟隨鎖定切換 + 打軸 + 換詞
+                                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(if (autoScrollEnabled) CyanAccent.copy(alpha = 0.2f) else CardDark)
+                                                    .clickable { autoScrollEnabled = !autoScrollEnabled }
+                                                    .padding(horizontal = 7.dp, vertical = 4.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (autoScrollEnabled) "跟隨" else "自由",
+                                                    color = if (autoScrollEnabled) CyanAccent else TextSecondary,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                            if (lyricsList.isNotEmpty()) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(6.dp))
+                                                        .background(AmberAccent.copy(alpha = 0.2f))
+                                                        .clickable {
+                                                            tapSyncDraft = lyricsList.toList()
+                                                            val currentIdx = lyricsList.indexOfLast {
+                                                                (currentPosMs + lyricsOffsetMs) >= it.timestampMs
+                                                            }.coerceAtLeast(0)
+                                                            tapSyncTargetIndex = currentIdx
+                                                            isTapSyncMode = true
+                                                            Toast.makeText(context, "打軸模式：聽到句子開唱即點按下方「同步」！", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                        .padding(horizontal = 7.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text("打軸", color = AmberAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(CardDark)
+                                                    .clickable {
+                                                        val defaultQuery = title.ifEmpty { dbItem?.title ?: currentMediaItem?.mediaMetadata?.title?.toString() ?: "" }
+                                                        searchQuery = defaultQuery
+                                                        showSearchDialog = true
+                                                        isSearchingCandidates = true
+                                                        coroutineScope.launch {
+                                                            val durSec = if (durationMs > 0L) durationMs / 1000L else 0L
+                                                            candidates = app.lyricsManager.searchLyricsCandidates(defaultQuery, artist, durSec)
+                                                            isSearchingCandidates = false
+                                                        }
+                                                    }
+                                                    .padding(horizontal = 7.dp, vertical = 4.dp)
+                                            ) {
+                                                Text("換詞", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
@@ -534,6 +748,141 @@ fun PlayerScreen(
         }
 
         Spacer(modifier = Modifier.height(10.dp))
+    }
+
+    // 候選歌詞版本搜尋與還原對話框
+    if (showSearchDialog) {
+        val hasCustom = !activeMediaId.isNullOrBlank() && app.lyricsManager.hasCustomSyncedLrc(context, activeMediaId)
+        AlertDialog(
+            onDismissRequest = { showSearchDialog = false },
+            title = { Text("切換歌詞版本", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            label = { Text("搜尋關鍵字") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = {
+                                isSearchingCandidates = true
+                                coroutineScope.launch {
+                                    val durSec = if (durationMs > 0L) durationMs / 1000L else 0L
+                                    candidates = app.lyricsManager.searchLyricsCandidates(searchQuery, "", durSec)
+                                    isSearchingCandidates = false
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text("搜尋", color = BgDark, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    if (isSearchingCandidates) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().height(160.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(color = CyanAccent)
+                        }
+                    } else if (candidates.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().height(120.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("找不到相符歌詞版本，可嘗試精簡歌名關鍵字", color = TextSecondary, fontSize = 12.sp, textAlign = TextAlign.Center)
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(candidates, key = { it.id }) { cand ->
+                                val durText = if (cand.durationSec > 0L) {
+                                    String.format(Locale.US, "%02d:%02d", cand.durationSec / 60, cand.durationSec % 60)
+                                } else "--:--"
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(SurfaceDark)
+                                        .clickable {
+                                            val id = activeMediaId
+                                            if (!id.isNullOrBlank()) {
+                                                app.lyricsManager.saveCustomSyncedLrc(context, id, cand.lines)
+                                                lyricsList = cand.lines
+                                                showSearchDialog = false
+                                                Toast.makeText(context, "✅ 已套用「${cand.trackName}」歌詞版本", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                        .padding(10.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = if (cand.isSynced) "[同步]" else "[純字]",
+                                            color = if (cand.isSynced) CyanAccent else AmberAccent,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = cand.trackName,
+                                            color = TextPrimary,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Text(durText, color = TextSecondary, fontSize = 11.sp)
+                                    }
+                                    Text(
+                                        text = listOf(cand.artistName, cand.albumName).filter { it.isNotBlank() }.joinToString(" · "),
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (hasCustom) {
+                    TextButton(onClick = {
+                        val id = activeMediaId
+                        if (!id.isNullOrBlank()) {
+                            app.lyricsManager.clearCustomSyncedLrc(context, id)
+                            app.lyricsManager.saveOffsetMs(context, id, 0L)
+                            lyricsOffsetMs = 0L
+                            lyricsReloadNonce += 1
+                            showSearchDialog = false
+                            Toast.makeText(context, "已還原為雲端/預設原始歌詞", Toast.LENGTH_SHORT).show()
+                        }
+                    }) {
+                        Text("還原原版", color = AmberAccent)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSearchDialog = false }) {
+                    Text("關閉", color = TextSecondary)
+                }
+            },
+            containerColor = CardDark
+        )
     }
 }
 

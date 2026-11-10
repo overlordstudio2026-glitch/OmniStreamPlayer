@@ -8,8 +8,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
 
@@ -18,23 +20,95 @@ data class LyricLine(
     val text: String
 )
 
+data class LyricsCandidate(
+    val id: Long,
+    val trackName: String,
+    val artistName: String,
+    val albumName: String,
+    val durationSec: Long,
+    val isSynced: Boolean,
+    val lines: List<LyricLine>
+)
+
 /**
- * 動態同步歌詞管理器（全格式支援版）：
- * 1. 優先讀取曲目自帶的雲端 / 本機歌詞檔案 (lyricsUri)
- * 2. 支援標準 .lrc (含單行多標籤與 offset)、.srt 字幕、以及無時間軸之結構化/純文字歌詞 (如 [Verse]/[Chorus] txt)
- * 3. 若無專屬檔案，自動回退查詢全球開源歌詞庫 LRCLIB
+ * 動態同步歌詞管理器（全格式 + 調校記憶 + 打軸覆寫 + 多版本搜尋支援版）：
+ * 1. 最優先讀取使用者「邊聽邊打軸 / 手動挑選」儲存的本機自訂 LRC
+ * 2. 其次讀取曲目自帶的雲端 / 本機歌詞檔案 (lyricsUri)
+ * 3. 支援標準 .lrc (含單行多標籤與 offset)、.srt 字幕、以及無時間軸結構化/純文字自動映射
+ * 4. 若無專屬檔案，查詢全球開源歌詞庫 LRCLIB（含多版本候選搜尋與單曲偏移記憶）
  */
 class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
 
     companion object {
         private const val TAG = "LyricsManager"
         private const val LRCLIB_API = "https://lrclib.net/api/get"
+        private const val LRCLIB_SEARCH_API = "https://lrclib.net/api/search"
+        private const val PREFS_OFFSET = "omnistream_lyrics_prefs"
+        private const val CUSTOM_LYRICS_DIR = "custom_lyrics"
         private val LRC_TAG_PATTERN = Pattern.compile("\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\]")
         private val SRT_TIME_PATTERN = Pattern.compile("(?:(\\d{1,2}):)?(\\d{2}):(\\d{2})[,.](\\d{3})\\s*-->")
         private val SECTION_TAG_PATTERN = Pattern.compile("^\\[(intro|verse|chorus|bridge|inter|outro|solo|pre-chorus|hook|instrumental).*\\]$", Pattern.CASE_INSENSITIVE)
     }
 
     private val lyricsCache = ConcurrentHashMap<String, List<LyricLine>>()
+
+    // --- 單曲偏移量記憶 (ms) ---
+    fun getOffsetMs(context: Context, mediaId: String): Long {
+        return context.getSharedPreferences(PREFS_OFFSET, Context.MODE_PRIVATE)
+            .getLong("offset_$mediaId", 0L)
+    }
+
+    fun saveOffsetMs(context: Context, mediaId: String, offsetMs: Long) {
+        context.getSharedPreferences(PREFS_OFFSET, Context.MODE_PRIVATE)
+            .edit()
+            .putLong("offset_$mediaId", offsetMs)
+            .apply()
+    }
+
+    // --- 單曲打軸 / 自訂版本本機持久化 LRC ---
+    private fun getCustomLrcFile(context: Context, mediaId: String): File {
+        val dir = File(context.filesDir, CUSTOM_LYRICS_DIR)
+        if (!dir.exists()) dir.mkdirs()
+        val safeName = mediaId.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        return File(dir, "$safeName.lrc")
+    }
+
+    fun hasCustomSyncedLrc(context: Context, mediaId: String): Boolean {
+        val f = getCustomLrcFile(context, mediaId)
+        return f.exists() && f.length() > 10L
+    }
+
+    fun saveCustomSyncedLrc(context: Context, mediaId: String, lines: List<LyricLine>) {
+        val sorted = lines.sortedBy { it.timestampMs }
+        val sb = StringBuilder()
+        for (ln in sorted) {
+            val totalMs = ln.timestampMs.coerceAtLeast(0L)
+            val min = totalMs / 60_000L
+            val sec = (totalMs % 60_000L) / 1000L
+            val cs = (totalMs % 1000L) / 10L
+            sb.append(String.format(Locale.US, "[%02d:%02d.%02d]%s\n", min, sec, cs, ln.text))
+        }
+        getCustomLrcFile(context, mediaId).writeText(sb.toString(), Charsets.UTF_8)
+        invalidateCache(mediaId)
+    }
+
+    fun loadCustomSyncedLrc(context: Context, mediaId: String): List<LyricLine>? {
+        val f = getCustomLrcFile(context, mediaId)
+        if (!f.exists() || !f.canRead()) return null
+        val parsed = parseLrc(f.readText(Charsets.UTF_8))
+        return parsed.takeIf { it.isNotEmpty() }
+    }
+
+    fun clearCustomSyncedLrc(context: Context, mediaId: String) {
+        val f = getCustomLrcFile(context, mediaId)
+        if (f.exists()) f.delete()
+        invalidateCache(mediaId)
+    }
+
+    fun invalidateCache(mediaIdPrefix: String) {
+        val keys = lyricsCache.keys.filter { it.startsWith("$mediaIdPrefix|") }
+        keys.forEach { lyricsCache.remove(it) }
+    }
 
     /**
      * 嘗試獲取指定曲目的時間軸同步歌詞
@@ -48,6 +122,14 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
         accessToken: String? = null,
         context: Context? = null
     ): List<LyricLine> = withContext(Dispatchers.IO) {
+        // 0. 最優先檢查使用者是否有親手打軸或選定的本機覆寫版本
+        if (context != null) {
+            loadCustomSyncedLrc(context, cacheKey)?.let { custom ->
+                Log.i(TAG, "Loaded ${custom.size} custom/synced lines for $trackTitle")
+                return@withContext custom
+            }
+        }
+
         val effectiveCacheKey = "${cacheKey}|${lyricsUri.orEmpty()}|${if (durationSec > 0L) 1 else 0}"
         lyricsCache[effectiveCacheKey]?.let { return@withContext it }
 
@@ -112,6 +194,72 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
             Log.w(TAG, "Failed fetching lyrics for $cleanTitle: ${e.message}")
         }
         return@withContext emptyList()
+    }
+
+    /**
+     * 搜尋多個歌詞候選版本（供使用者切換 Live 版 / MV 版 / Studio 版或替換錯誤歌詞）
+     */
+    suspend fun searchLyricsCandidates(
+        trackTitle: String,
+        artistName: String = "",
+        durationSec: Long = 0L
+    ): List<LyricsCandidate> = withContext(Dispatchers.IO) {
+        val cleanTitle = cleanTrackTitle(trackTitle)
+        if (cleanTitle.isBlank()) return@withContext emptyList()
+
+        val result = mutableListOf<LyricsCandidate>()
+        try {
+            val urlBuilder = LRCLIB_SEARCH_API.toHttpUrlOrNull()?.newBuilder() ?: return@withContext emptyList()
+            urlBuilder.addQueryParameter("q", cleanTitle)
+
+            val request = Request.Builder()
+                .url(urlBuilder.build())
+                .addHeader("User-Agent", "OmniStreamPlayer/2026 (https://github.com/overlordstudio2026-glitch/OmniStreamPlayer)")
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string().orEmpty()
+                val arr = JSONArray(body)
+                val limit = arr.length().coerceAtMost(12)
+                for (i in 0 until limit) {
+                    val obj = arr.getJSONObject(i)
+                    val id = obj.optLong("id", i.toLong())
+                    val tName = obj.optString("trackName", cleanTitle)
+                    val aName = obj.optString("artistName", artistName)
+                    val album = obj.optString("albumName", "")
+                    val dur = obj.optDouble("duration", 0.0).toLong()
+                    val syncedStr = obj.optString("syncedLyrics", "").trim()
+                    val plainStr = obj.optString("plainLyrics", "").trim()
+
+                    val parsed = when {
+                        syncedStr.isNotBlank() -> parseLrc(syncedStr)
+                        plainStr.isNotBlank() -> parsePlainOrStructuredLyrics(plainStr, if (dur > 0L) dur else durationSec)
+                        else -> emptyList()
+                    }
+                    if (parsed.isNotEmpty()) {
+                        result.add(
+                            LyricsCandidate(
+                                id = id,
+                                trackName = tName,
+                                artistName = aName,
+                                albumName = album,
+                                durationSec = dur,
+                                isSynced = syncedStr.isNotBlank(),
+                                lines = parsed
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed searching lyrics candidates for $cleanTitle: ${e.message}")
+        }
+        // 優先將帶有精準同步時間軸且時長最接近的排在前面
+        result.sortedWith(compareByDescending<LyricsCandidate> { it.isSynced }.thenBy {
+            if (durationSec > 0L && it.durationSec > 0L) kotlin.math.abs(it.durationSec - durationSec) else 9999L
+        })
     }
 
     private fun readLyricsFromUri(uriStr: String, accessToken: String?, context: Context?): String? {
@@ -281,7 +429,6 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
      * 依據曲目真實時長與句子長度權重自動生成自然時間軸
      */
     fun parsePlainOrStructuredLyrics(rawText: String, durationSec: Long = 0L): List<LyricLine> {
-        // 每個元素為 (是否為純樂器/段落休息標記, 顯示文字, 權重)
         data class ParsedSegment(val isBreak: Boolean, val text: String, val weight: Double)
 
         val segments = mutableListOf<ParsedSegment>()
@@ -295,7 +442,7 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
                     lower.contains("intro") -> 14.0
                     lower.contains("inter") || lower.contains("solo") -> 12.0
                     lower.contains("outro") -> 10.0
-                    else -> 2.0 // [Verse] [Chorus] 換段小呼吸
+                    else -> 2.0
                 }
                 if (lower.contains("intro") || lower.contains("inter") || lower.contains("solo")) {
                     segments.add(ParsedSegment(true, "♪ 間奏 / 樂器演奏 ♪", breakWeight))
@@ -303,14 +450,12 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
                     segments.add(ParsedSegment(true, "", breakWeight))
                 }
             } else {
-                // 文字行權重：基本句長 + 字數比例
                 val weight = 4.0 + (trimmed.length * 0.35)
                 segments.add(ParsedSegment(false, trimmed, weight))
             }
         }
 
         val totalWeight = segments.sumOf { it.weight }.coerceAtLeast(1.0)
-        // 若播放器尚未取得精準時長，預設估算 220 秒，待時長載入或重新計算時自動校準
         val totalDurationMs = if (durationSec > 10L) (durationSec * 1000L * 0.94).toLong() else 210_000L
 
         val result = mutableListOf<LyricLine>()
