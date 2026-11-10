@@ -96,12 +96,22 @@ class PlayerRepository(
         val existingMap = existingEntities.associateBy { it.id }.toMutableMap()
         var newCount = 0
 
-        // 檢查並加入新檔案
+        // 檢查並加入新檔案，並對既有曲目同步最新配對的歌詞與封面網址
         for (file in remoteFiles) {
-            if (!existingMap.containsKey(file.id)) {
+            val existing = existingMap[file.id]
+            if (existing == null) {
                 val newEntity = PlaylistItemEntity.fromDomain(file, 0, groupId)
                 existingMap[file.id] = newEntity
                 newCount++
+            } else {
+                val updatedLyrics = file.lyricsUri ?: existing.lyricsUri
+                val updatedArt = file.artworkUri ?: existing.artworkUri
+                if (updatedLyrics != existing.lyricsUri || updatedArt != existing.artworkUri) {
+                    existingMap[file.id] = existing.copy(
+                        lyricsUri = updatedLyrics,
+                        artworkUri = updatedArt
+                    )
+                }
             }
         }
 
@@ -298,7 +308,9 @@ class PlayerRepository(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
-            MediaStore.Audio.Media.DURATION
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.ALBUM_ID,
+            MediaStore.Audio.Media.DATA
         )
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
         val query = context.contentResolver.query(
@@ -313,13 +325,39 @@ class PlayerRepository(
             val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
             val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
             val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+            val albumIdCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM_ID)
+            val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
                 val title = cursor.getString(titleCol) ?: "未知曲目"
                 val artist = cursor.getString(artistCol) ?: "本機音訊"
                 val duration = cursor.getLong(durationCol)
+                val albumId = if (albumIdCol >= 0) cursor.getLong(albumIdCol) else -1L
+                val filePath = if (dataCol >= 0) cursor.getString(dataCol) else null
                 val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
+
+                val localArtUri = if (albumId > 0L) {
+                    "content://media/external/audio/albumart/$albumId"
+                } else null
+
+                var localLyricUri: String? = null
+                if (!filePath.isNullOrBlank()) {
+                    val audioFile = File(filePath)
+                    val base = audioFile.nameWithoutExtension
+                    val parent = audioFile.parentFile
+                    if (parent != null && parent.exists()) {
+                        val lrcFile = File(parent, "$base.lrc")
+                        val srtFile = File(parent, "$base.srt")
+                        val txtFile = File(parent, "$base.txt")
+                        localLyricUri = when {
+                            lrcFile.exists() && lrcFile.canRead() -> lrcFile.toURI().toString()
+                            srtFile.exists() && srtFile.canRead() -> srtFile.toURI().toString()
+                            txtFile.exists() && txtFile.canRead() -> txtFile.toURI().toString()
+                            else -> null
+                        }
+                    }
+                }
 
                 list.add(
                     PlaylistItem(
@@ -328,7 +366,9 @@ class PlayerRepository(
                         artist = artist,
                         durationMs = duration,
                         mediaUri = contentUri.toString(),
-                        sourceType = MediaSourceType.LOCAL
+                        sourceType = MediaSourceType.LOCAL,
+                        artworkUri = localArtUri,
+                        lyricsUri = localLyricUri
                     )
                 )
             }

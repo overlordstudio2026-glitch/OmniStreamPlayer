@@ -8,6 +8,7 @@ data class PlaylistItem(
     val mediaUri: String,                   // 實體播放 URI 或串流連結
     val sourceType: MediaSourceType,        // 來源類別
     val artworkUri: String? = null,         // 封面縮圖 URI
+    val lyricsUri: String? = null,          // 專屬歌詞檔案 URI（如雲端/本機 .lrc, .srt, .txt）
     val driveFolderId: String? = null,      // 若為 GDrive 則記錄所屬資料夾
     val ytChannelId: String? = null,        // 若為 YT 則記錄所屬頻道
     val addedTime: Long = System.currentTimeMillis(), // 加入時間戳

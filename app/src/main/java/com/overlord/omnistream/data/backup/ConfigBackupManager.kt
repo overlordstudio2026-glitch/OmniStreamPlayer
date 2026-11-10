@@ -123,6 +123,7 @@ class ConfigBackupManager(private val context: Context, private val database: Ap
                 obj.put("mediaUri", item.mediaUri)
                 obj.put("sourceType", item.sourceType)
                 obj.put("artworkUri", item.artworkUri)
+                obj.put("lyricsUri", item.lyricsUri)
                 obj.put("driveFolderId", item.driveFolderId)
                 obj.put("ytChannelId", item.ytChannelId)
                 obj.put("sortOrder", item.sortOrder)
@@ -294,6 +295,7 @@ class ConfigBackupManager(private val context: Context, private val database: Ap
                             mediaUri = obj.getString("mediaUri"),
                             sourceType = obj.optString("sourceType", "LOCAL"),
                             artworkUri = obj.optString("artworkUri").takeIf { it.isNotBlank() },
+                            lyricsUri = obj.optString("lyricsUri").takeIf { it.isNotBlank() },
                             driveFolderId = obj.optString("driveFolderId").takeIf { it.isNotBlank() },
                             ytChannelId = obj.optString("ytChannelId").takeIf { it.isNotBlank() },
                             sortOrder = obj.optInt("sortOrder", i),

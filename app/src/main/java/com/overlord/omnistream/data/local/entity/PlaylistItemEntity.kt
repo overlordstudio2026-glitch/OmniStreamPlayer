@@ -14,6 +14,7 @@ data class PlaylistItemEntity(
     val mediaUri: String,
     val sourceType: String,
     val artworkUri: String?,
+    val lyricsUri: String? = null,               // 專屬歌詞 URI（雲端或本機歌詞檔）
     val driveFolderId: String?,
     val ytChannelId: String?,
     val sortOrder: Int,
@@ -31,6 +32,7 @@ data class PlaylistItemEntity(
             mediaUri = mediaUri,
             sourceType = safeType,
             artworkUri = artworkUri,
+            lyricsUri = lyricsUri,
             driveFolderId = driveFolderId,
             ytChannelId = ytChannelId,
             addedTime = addedTime,
@@ -48,6 +50,7 @@ data class PlaylistItemEntity(
                 mediaUri = item.mediaUri,
                 sourceType = item.sourceType.name,
                 artworkUri = item.artworkUri,
+                lyricsUri = item.lyricsUri,
                 driveFolderId = item.driveFolderId,
                 ytChannelId = item.ytChannelId,
                 sortOrder = sortOrder,

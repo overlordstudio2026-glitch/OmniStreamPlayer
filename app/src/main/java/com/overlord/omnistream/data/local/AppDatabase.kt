@@ -17,7 +17,7 @@ import com.overlord.omnistream.data.local.entity.SubscriptionEntity
 
 @Database(
     entities = [PlaylistItemEntity::class, PlaybackStateEntity::class, SubscriptionEntity::class, PlaylistGroupEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -79,6 +79,12 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 addColumnIfNotExists(db, "playlist_items", "lastPlayedTime", "INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                addColumnIfNotExists(db, "playlist_items", "lyricsUri", "TEXT DEFAULT NULL")
             }
         }
 
@@ -146,7 +152,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_4_5,
                     MIGRATION_3_5,
                     MIGRATION_2_5,
-                    MIGRATION_1_5
+                    MIGRATION_1_5,
+                    MIGRATION_5_6
                 )
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .build()

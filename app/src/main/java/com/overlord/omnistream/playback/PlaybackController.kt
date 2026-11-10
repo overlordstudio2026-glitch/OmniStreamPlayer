@@ -279,6 +279,12 @@ class PlaybackController(private val context: Context) {
                 if (!resolvedArtUrl.isNullOrBlank()) {
                     metaBuilder.setArtworkUri(android.net.Uri.parse(resolvedArtUrl))
                 }
+                if (!item.lyricsUri.isNullOrBlank()) {
+                    val extras = android.os.Bundle().apply {
+                        putString("LYRICS_URI", item.lyricsUri)
+                    }
+                    metaBuilder.setExtras(extras)
+                }
                 MediaItem.Builder()
                     .setMediaId(item.id)
                     .setUri(item.mediaUri)

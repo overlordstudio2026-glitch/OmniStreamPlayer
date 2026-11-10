@@ -26,7 +26,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -34,6 +37,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.overlord.omnistream.OmniStreamApp
 import com.overlord.omnistream.core.cache.ImageCacheManager
 import com.overlord.omnistream.data.lyrics.LyricLine
@@ -65,8 +70,8 @@ fun PlayerScreen(
     var lyricsList by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var isLoadingLyrics by remember { mutableStateOf(false) }
 
-    // 當前曲目切換時，自動非同步抓取動態同步歌詞 (LRCLIB)
-    LaunchedEffect(currentMediaItem?.mediaId) {
+    // 當前曲目切換或取得總時長時，自動非同步抓取動態同步歌詞（支援雲端/本機 .lrc/.srt/.txt 與 LRCLIB）
+    LaunchedEffect(currentMediaItem?.mediaId, durationMs > 0L) {
         val item = currentMediaItem
         val targetId = item?.mediaId
         if (item != null && !targetId.isNullOrBlank()) {
@@ -75,7 +80,17 @@ fun PlayerScreen(
                 val durSec = if (durationMs > 0L) (durationMs / 1000L) else 0L
                 val t = title.ifEmpty { item.mediaMetadata.title?.toString() ?: "" }
                 val a = artist.ifEmpty { item.mediaMetadata.artist?.toString() ?: "" }
-                val fetched = app.lyricsManager.fetchLyrics(targetId, t, a, durSec)
+                val dedicatedLyricsUri = item.mediaMetadata.extras?.getString("LYRICS_URI")
+                val accessToken = app.repository.gdriveService.currentAccessToken
+                val fetched = app.lyricsManager.fetchLyrics(
+                    cacheKey = targetId,
+                    trackTitle = t,
+                    artistName = a,
+                    durationSec = durSec,
+                    lyricsUri = dedicatedLyricsUri,
+                    accessToken = accessToken,
+                    context = context
+                )
                 // 嚴格比對：防止快速切歌時前一首的延遲請求覆蓋當前歌曲歌詞
                 if (currentMediaItem?.mediaId == targetId) {
                     lyricsList = fetched
@@ -206,27 +221,79 @@ fun PlayerScreen(
                 label = "PlayerCenterContent"
             ) { isLyricsMode ->
                 if (isLyricsMode) {
-                    if (isLoadingLyrics) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            CircularProgressIndicator(color = CyanAccent, modifier = Modifier.size(32.dp))
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "正在搜尋雲端同步歌詞...",
-                                color = TextSecondary,
-                                fontSize = 13.sp
+                    // 歌詞模式：底層襯托暗色封面 + 深色漸層暗罩，絕不搶戲且大氣有層次
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(CardDark.copy(alpha = 0.35f))
+                            .border(1.dp, CyanAccent.copy(alpha = 0.12f), RoundedCornerShape(20.dp))
+                    ) {
+                        if (artworkUrl != null) {
+                            AsyncImage(
+                                model = remember(artworkUrl) {
+                                    ImageRequest.Builder(context)
+                                        .data(artworkUrl)
+                                        .size(560)
+                                        .crossfade(true)
+                                        .build()
+                                },
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .alpha(0.24f)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                BgDark.copy(alpha = 0.85f),
+                                                BgDark.copy(alpha = 0.65f),
+                                                BgDark.copy(alpha = 0.88f)
+                                            )
+                                        )
+                                    )
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.radialGradient(
+                                            colors = listOf(
+                                                CyanAccent.copy(alpha = 0.08f),
+                                                BgDark.copy(alpha = 0.92f)
+                                            )
+                                        )
+                                    )
                             )
                         }
-                    } else {
-                        LyricsView(
-                            lyrics = lyricsList,
-                            currentPositionMs = currentPosMs,
-                            onSeekTo = { controller.seekTo(it) },
-                            modifier = Modifier.fillMaxSize()
-                        )
+
+                        if (isLoadingLyrics) {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                CircularProgressIndicator(color = CyanAccent, modifier = Modifier.size(32.dp))
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "正在搜尋雲端與網路同步歌詞...",
+                                    color = TextSecondary,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        } else {
+                            LyricsView(
+                                lyrics = lyricsList,
+                                currentPositionMs = currentPosMs,
+                                onSeekTo = { controller.seekTo(it) },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 } else {
                     Column(
