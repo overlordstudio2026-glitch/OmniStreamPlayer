@@ -43,8 +43,10 @@ class CrossfadeManager(
         isFadingOut = false
         crossfadeJob?.cancel()
         crossfadeJob = null
-        if (::exoPlayer.isInitialized) {
+        try {
             exoPlayer.volume = targetVolume
+        } catch (e: Throwable) {
+            // ignore if player already released
         }
     }
 
