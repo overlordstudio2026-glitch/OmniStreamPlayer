@@ -58,6 +58,11 @@ class PlayerRepository(
         backupManager.createBackup()
     }
 
+    data class SyncFolderResult(
+        val addedCount: Int,
+        val metadataUpdatedCount: Int
+    )
+
     // 取得指定群組的播放清單
     fun getPlaylistFlow(groupId: String = "default"): Flow<List<PlaylistItem>> {
         return playlistDao.getByGroupFlow(groupId).map { list -> list.map { it.toDomain() } }
@@ -65,6 +70,14 @@ class PlayerRepository(
 
     suspend fun getPlaylistItems(groupId: String = "default"): List<PlaylistItem> {
         return playlistDao.getByGroup(groupId).map { it.toDomain() }
+    }
+
+    fun getItemByIdFlow(id: String): Flow<PlaylistItem?> {
+        return playlistDao.getByIdFlow(id).map { it?.toDomain() }
+    }
+
+    suspend fun getItemById(id: String): PlaylistItem? {
+        return playlistDao.getById(id)?.toDomain()
     }
 
     suspend fun addItemsToPlaylist(items: List<PlaylistItem>, groupId: String = "default") {
@@ -76,25 +89,33 @@ class PlayerRepository(
         backupManager.createBackup()
     }
 
-    /**
-     * 深度同步並合併 Google Drive 資料夾項目：
-     * 1. 抓取雲端最新檔案（包含持續新增的集數）
-     * 2. 與群組內既有項目合併（補充新檔案）
-     * 3. 依自然排序重新整理整個群組中所有項目的 sortOrder
-     * 4. 即時觸發備份
-     * @return 新增的檔案數量
-     */
     suspend fun syncAndMergeFolderItems(
         groupId: String,
         folderId: String,
         folderName: String
-    ): Int = withContext(Dispatchers.IO) {
+    ): Int {
+        return syncAndMergeFolderItemsDetailed(groupId, folderId, folderName).addedCount
+    }
+
+    /**
+     * 深度同步並合併 Google Drive 資料夾項目：
+     * 1. 抓取雲端最新檔案與同資料夾歌詞 (.lrc/.srt/.txt) 及封面圖
+     * 2. 與群組內既有項目合併（補充新檔案並同步更新既有歌曲歌詞/封面）
+     * 3. 依自然排序重新整理整個群組中所有項目的 sortOrder
+     * 4. 即時觸發備份
+     */
+    suspend fun syncAndMergeFolderItemsDetailed(
+        groupId: String,
+        folderId: String,
+        folderName: String
+    ): SyncFolderResult = withContext(Dispatchers.IO) {
         val remoteFiles = gdriveService.fetchFolderAudioFiles(folderId, folderName)
-        if (remoteFiles.isEmpty()) return@withContext 0
+        if (remoteFiles.isEmpty()) return@withContext SyncFolderResult(0, 0)
 
         val existingEntities = playlistDao.getByGroup(groupId)
         val existingMap = existingEntities.associateBy { it.id }.toMutableMap()
         var newCount = 0
+        var metadataUpdatedCount = 0
 
         // 檢查並加入新檔案，並對既有曲目同步最新配對的歌詞與封面網址
         for (file in remoteFiles) {
@@ -104,13 +125,14 @@ class PlayerRepository(
                 existingMap[file.id] = newEntity
                 newCount++
             } else {
-                val updatedLyrics = file.lyricsUri ?: existing.lyricsUri
-                val updatedArt = file.artworkUri ?: existing.artworkUri
+                val updatedLyrics = if (!file.lyricsUri.isNullOrBlank()) file.lyricsUri else existing.lyricsUri
+                val updatedArt = if (!file.artworkUri.isNullOrBlank()) file.artworkUri else existing.artworkUri
                 if (updatedLyrics != existing.lyricsUri || updatedArt != existing.artworkUri) {
                     existingMap[file.id] = existing.copy(
                         lyricsUri = updatedLyrics,
                         artworkUri = updatedArt
                     )
+                    metadataUpdatedCount++
                 }
             }
         }
@@ -127,7 +149,7 @@ class PlayerRepository(
 
         playlistDao.insertAll(reorderedEntities)
         backupManager.createBackup()
-        return@withContext newCount
+        return@withContext SyncFolderResult(newCount, metadataUpdatedCount)
     }
 
     suspend fun removeItemFromPlaylist(id: String) {

@@ -48,7 +48,8 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
         accessToken: String? = null,
         context: Context? = null
     ): List<LyricLine> = withContext(Dispatchers.IO) {
-        lyricsCache[cacheKey]?.let { return@withContext it }
+        val effectiveCacheKey = "${cacheKey}|${lyricsUri.orEmpty()}|${if (durationSec > 0L) 1 else 0}"
+        lyricsCache[effectiveCacheKey]?.let { return@withContext it }
 
         // 1. 若有綁定專屬雲端或本機歌詞檔 (lyricsUri)，優先讀取並自動依格式解析
         if (!lyricsUri.isNullOrBlank()) {
@@ -56,7 +57,7 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
             if (!rawText.isNullOrBlank()) {
                 val parsed = parseAnyLyricsFormat(rawText, durationSec)
                 if (parsed.isNotEmpty()) {
-                    lyricsCache[cacheKey] = parsed
+                    lyricsCache[effectiveCacheKey] = parsed
                     Log.i(TAG, "Loaded ${parsed.size} lines from dedicated lyricsUri for $trackTitle")
                     return@withContext parsed
                 }
@@ -91,7 +92,7 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
                 if (syncedLrc.isNotBlank()) {
                     val lines = parseLrc(syncedLrc)
                     if (lines.isNotEmpty()) {
-                        lyricsCache[cacheKey] = lines
+                        lyricsCache[effectiveCacheKey] = lines
                         Log.i(TAG, "Loaded ${lines.size} synced lyric lines from LRCLIB for $cleanTitle")
                         return@withContext lines
                     }
@@ -102,7 +103,7 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
                 if (plainLyrics.isNotBlank()) {
                     val fallbackLines = parsePlainOrStructuredLyrics(plainLyrics, durationSec)
                     if (fallbackLines.isNotEmpty()) {
-                        lyricsCache[cacheKey] = fallbackLines
+                        lyricsCache[effectiveCacheKey] = fallbackLines
                         return@withContext fallbackLines
                     }
                 }
@@ -117,22 +118,23 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
         return try {
             when {
                 uriStr.startsWith("http://") || uriStr.startsWith("https://") -> {
-                    val reqBuilder = Request.Builder()
-                        .url(uriStr)
-                        .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    if (!accessToken.isNullOrBlank() && uriStr.contains("googleapis.com")) {
-                        reqBuilder.addHeader("Authorization", "Bearer $accessToken")
-                    }
-                    val resp = client.newCall(reqBuilder.build()).execute()
-                    if (resp.isSuccessful) {
-                        val content = resp.body?.string().orEmpty()
-                        // 防呆：確認 Google Drive 未回傳 HTML 病毒警告或登入頁面
-                        if (content.contains("<!DOCTYPE html>", ignoreCase = true) || content.contains("<html", ignoreCase = true)) {
-                            null
+                    val primaryText = fetchHttpText(uriStr, accessToken)
+                    if (!primaryText.isNullOrBlank()) return primaryText
+
+                    // Google Drive 雙重備援：若 uc?export=download 遭到限制或回傳 HTML，嘗試 Drive v3 alt=media 直接拉取原文
+                    val gdriveIdMatch = Regex("[?&]id=([a-zA-Z0-9_-]{25,})").find(uriStr)
+                        ?: Regex("/files/([a-zA-Z0-9_-]{25,})").find(uriStr)
+                    val fileId = gdriveIdMatch?.groupValues?.get(1)
+                    if (!fileId.isNullOrBlank()) {
+                        val apiUrl = if (!accessToken.isNullOrBlank()) {
+                            "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
                         } else {
-                            content
+                            "https://www.googleapis.com/drive/v3/files/$fileId?alt=media&key=${com.overlord.omnistream.data.gdrive.GoogleDriveService.PUBLIC_DRIVE_API_KEY}"
                         }
-                    } else null
+                        val fallbackText = fetchHttpText(apiUrl, accessToken)
+                        if (!fallbackText.isNullOrBlank()) return fallbackText
+                    }
+                    null
                 }
                 uriStr.startsWith("content://") && context != null -> {
                     context.contentResolver.openInputStream(Uri.parse(uriStr))?.bufferedReader()?.use { it.readText() }
@@ -147,6 +149,28 @@ class LyricsManager(private val client: OkHttpClient = OkHttpClient()) {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read lyrics from $uriStr: ${e.message}")
+            null
+        }
+    }
+
+    private fun fetchHttpText(url: String, accessToken: String?): String? {
+        return try {
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            if (!accessToken.isNullOrBlank() && url.contains("googleapis.com")) {
+                reqBuilder.addHeader("Authorization", "Bearer $accessToken")
+            }
+            val resp = client.newCall(reqBuilder.build()).execute()
+            if (resp.isSuccessful) {
+                val content = resp.body?.string().orEmpty()
+                if (content.contains("<!DOCTYPE html>", ignoreCase = true) || content.contains("<html", ignoreCase = true)) {
+                    null
+                } else {
+                    content
+                }
+            } else null
+        } catch (e: Exception) {
             null
         }
     }

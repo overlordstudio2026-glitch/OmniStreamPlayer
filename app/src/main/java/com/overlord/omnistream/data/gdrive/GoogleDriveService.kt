@@ -20,7 +20,7 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
     var currentAccessToken: String? = null
 
     companion object {
-        private const val PUBLIC_DRIVE_API_KEY = "AIzaSyAWGrfCCr7albM3lmCc937gx4uIphbpeKQ"
+        internal const val PUBLIC_DRIVE_API_KEY = "AIzaSyAWGrfCCr7albM3lmCc937gx4uIphbpeKQ"
         private val FOLDER_ID_PATTERN = Pattern.compile("(?:folders/|[?&]id=)([a-zA-Z0-9_-]{25,})")
         private val LYRIC_EXTENSIONS = listOf(".lrc", ".srt", ".txt")
         private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".webp")
@@ -35,11 +35,13 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
         )
 
         /**
-         * 將檔名核心正規化以便跨命名格式模糊比對（如去除 _歌詞、_20260929、_Fin、_OK 與空白）
+         * 將檔名核心正規化以便跨命名格式模糊比對（如去除 _歌詞、_20260929、_Fin、_OK、全形底線＿ 與空白）
          */
         private fun normalizeCoreKey(rawTitle: String): String {
             return rawTitle.substringBeforeLast(".")
-                .replace(Regex("(?i)(_歌詞|_lyrics|_fin|_ok|_final|_日文版|＿ok|＿fin)"), "")
+                .replace('＿', '_')
+                .replace('\u3000', ' ')
+                .replace(Regex("(?i)(_歌詞|_lyrics|_fin|_ok|_final|_日文版)"), "")
                 .replace(Regex("_\\d{6,10}"), "")
                 .replace(Regex("_\\d{4}"), "")
                 .replace(Regex("[\\s_()（）【】\\[\\]]+"), "")
@@ -379,8 +381,8 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
                 }
             }
 
-            // 2. 備用方案：透過 DOM data-id 與 tooltip 標籤提取
-            val fallbackPattern = Pattern.compile("""data-id="([a-zA-Z0-9_-]{25,})"[^>]*data-tooltip="([^"]+\.(?:mp3|m4a|wav|aac|ogg|lrc|srt|txt|jpg|jpeg|png|webp))""")
+            // 2. 備用方案：透過 DOM data-id 與 tooltip 標籤提取（相容檔名後面帶有 " Audio"、" 文字" 等類型後綴）
+            val fallbackPattern = Pattern.compile("""data-id="([a-zA-Z0-9_-]{25,})"[^>]*data-tooltip="([^"]+\.(?:mp3|m4a|wav|aac|ogg|flac|opus|webm|lrc|srt|txt|jpg|jpeg|png|webp))(?:\s+[^"]*)?"""")
             val matcher = fallbackPattern.matcher(html)
             val seenIds = mutableSetOf<String>()
             while (matcher.find()) {

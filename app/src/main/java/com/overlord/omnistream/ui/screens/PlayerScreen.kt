@@ -70,24 +70,35 @@ fun PlayerScreen(
     var lyricsList by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var isLoadingLyrics by remember { mutableStateOf(false) }
 
-    // 當前曲目切換或取得總時長時，自動非同步抓取動態同步歌詞（支援雲端/本機 .lrc/.srt/.txt 與 LRCLIB）
-    LaunchedEffect(currentMediaItem?.mediaId, durationMs > 0L) {
+    val activeMediaId = currentMediaItem?.mediaId
+    // 直接訂閱 Room 資料庫取得該曲目的即時最新 Metadata（包含剛同步完的雲端 lyricsUri 與 artworkUri）
+    val dbItem by remember(activeMediaId) {
+        if (!activeMediaId.isNullOrBlank()) {
+            app.repository.getItemByIdFlow(activeMediaId)
+        } else {
+            kotlinx.coroutines.flow.flowOf(null)
+        }
+    }.collectAsState(initial = null)
+
+    val effectiveLyricsUri = dbItem?.lyricsUri ?: currentMediaItem?.mediaMetadata?.extras?.getString("LYRICS_URI")
+
+    // 當前曲目切換、取得總時長、或資料庫剛同步新歌詞 URI 時，立即自動非同步抓取動態同步歌詞
+    LaunchedEffect(activeMediaId, effectiveLyricsUri, durationMs > 0L) {
         val item = currentMediaItem
-        val targetId = item?.mediaId
+        val targetId = activeMediaId
         if (item != null && !targetId.isNullOrBlank()) {
             isLoadingLyrics = true
             try {
-                val durSec = if (durationMs > 0L) (durationMs / 1000L) else 0L
-                val t = title.ifEmpty { item.mediaMetadata.title?.toString() ?: "" }
-                val a = artist.ifEmpty { item.mediaMetadata.artist?.toString() ?: "" }
-                val dedicatedLyricsUri = item.mediaMetadata.extras?.getString("LYRICS_URI")
+                val durSec = if (durationMs > 0L) (durationMs / 1000L) else (dbItem?.durationMs ?: 0L) / 1000L
+                val t = title.ifEmpty { dbItem?.title ?: item.mediaMetadata.title?.toString() ?: "" }
+                val a = artist.ifEmpty { dbItem?.artist ?: item.mediaMetadata.artist?.toString() ?: "" }
                 val accessToken = app.repository.gdriveService.currentAccessToken
                 val fetched = app.lyricsManager.fetchLyrics(
                     cacheKey = targetId,
                     trackTitle = t,
                     artistName = a,
                     durationSec = durSec,
-                    lyricsUri = dedicatedLyricsUri,
+                    lyricsUri = effectiveLyricsUri,
                     accessToken = accessToken,
                     context = context
                 )
@@ -204,8 +215,8 @@ fun PlayerScreen(
 
         // 中間內容區域：大封面唱盤視覺 或 動態滾動歌詞
         val artworkUrl = ImageCacheManager.resolveArtworkUrl(
-            mediaId = currentMediaItem?.mediaId,
-            artworkUri = currentMediaItem?.mediaMetadata?.artworkUri?.toString(),
+            mediaId = activeMediaId,
+            artworkUri = dbItem?.artworkUri ?: currentMediaItem?.mediaMetadata?.artworkUri?.toString(),
             highQuality = true
         )
         Box(

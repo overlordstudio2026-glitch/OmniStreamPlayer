@@ -873,6 +873,15 @@ fun PlaylistItemRow(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
+                if (!item.lyricsUri.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "[詞]",
+                        color = CyanAccent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = item.artist,

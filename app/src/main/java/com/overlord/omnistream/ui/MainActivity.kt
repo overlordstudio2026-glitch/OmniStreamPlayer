@@ -342,6 +342,7 @@ class MainActivity : ComponentActivity() {
                                     lifecycleScope.launch(Dispatchers.IO) {
                                         isSyncingGDrive = true
                                         var totalNew = 0
+                                        var totalMetaUpdated = 0
                                         val subs = app.database.subscriptionDao().getAll().filter { it.type == "GDRIVE" }
                                         if (subs.isEmpty()) {
                                             isSyncingGDrive = false
@@ -353,16 +354,23 @@ class MainActivity : ComponentActivity() {
                                         // 依各資料夾绑定的 targetPlaylistGroupId 進行同步
                                         for (sub in subs) {
                                             val targetGid = sub.targetPlaylistGroupId.ifBlank { "default" }
-                                            val added = repo.syncAndMergeFolderItems(targetGid, sub.id, sub.name)
-                                            totalNew += added
+                                            val res = repo.syncAndMergeFolderItemsDetailed(targetGid, sub.id, sub.name)
+                                            totalNew += res.addedCount
+                                            totalMetaUpdated += res.metadataUpdatedCount
                                         }
                                         isSyncingGDrive = false
                                         withContext(Dispatchers.Main) {
-                                            if (totalNew > 0) {
-                                                Toast.makeText(this@MainActivity, "雲端同步完成！新增 $totalNew 首檔案並分類存入對應清單", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                Toast.makeText(this@MainActivity, "已是最新狀態，無新增雲端檔案", Toast.LENGTH_SHORT).show()
+                                            val msg = when {
+                                                totalNew > 0 && totalMetaUpdated > 0 ->
+                                                    "雲端同步完成！新增 $totalNew 首曲目並更新 $totalMetaUpdated 首歌詞/封面"
+                                                totalNew > 0 ->
+                                                    "雲端同步完成！新增 $totalNew 首檔案並分類存入對應清單"
+                                                totalMetaUpdated > 0 ->
+                                                    "✨ 已為 $totalMetaUpdated 首現有曲目綁定雲端歌詞或封面！"
+                                                else ->
+                                                    "已是最新狀態，無新增雲端檔案"
                                             }
+                                            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 },
@@ -466,14 +474,20 @@ class MainActivity : ComponentActivity() {
                                             withContext(Dispatchers.Main) {
                                                 Toast.makeText(this@MainActivity, "正在同步「${sub.name}」...", Toast.LENGTH_SHORT).show()
                                             }
-                                            val added = repo.syncAndMergeFolderItems(targetGid, sub.id, sub.name)
+                                            val res = repo.syncAndMergeFolderItemsDetailed(targetGid, sub.id, sub.name)
                                             val groupName = repo.groupDao.getAll().find { it.id == targetGid }?.name ?: "指定清單"
                                             withContext(Dispatchers.Main) {
-                                                if (added > 0) {
-                                                    Toast.makeText(this@MainActivity, "「${sub.name}」同步完成！新增 $added 首至「$groupName」", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    Toast.makeText(this@MainActivity, "「${sub.name}」已是最新狀態，無新增曲目", Toast.LENGTH_SHORT).show()
+                                                val msg = when {
+                                                    res.addedCount > 0 && res.metadataUpdatedCount > 0 ->
+                                                        "「${sub.name}」同步完成！新增 ${res.addedCount} 首並綁定 ${res.metadataUpdatedCount} 首歌詞/封面"
+                                                    res.addedCount > 0 ->
+                                                        "「${sub.name}」同步完成！新增 ${res.addedCount} 首至「$groupName」"
+                                                    res.metadataUpdatedCount > 0 ->
+                                                        "✨ 已為「${sub.name}」的 ${res.metadataUpdatedCount} 首現有曲目綁定雲端歌詞/封面！"
+                                                    else ->
+                                                        "「${sub.name}」已是最新狀態，無新增曲目"
                                                 }
+                                                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
                                             }
                                         }
                                     }
@@ -482,19 +496,27 @@ class MainActivity : ComponentActivity() {
                                     lifecycleScope.launch(Dispatchers.IO) {
                                         isSyncingGDrive = true
                                         var totalNew = 0
+                                        var totalMetaUpdated = 0
                                         val subs = app.database.subscriptionDao().getAll().filter { it.type == "GDRIVE" }
                                         for (sub in subs) {
                                             val targetGid = sub.targetPlaylistGroupId.ifBlank { "default" }
-                                            val added = repo.syncAndMergeFolderItems(targetGid, sub.id, sub.name)
-                                            totalNew += added
+                                            val res = repo.syncAndMergeFolderItemsDetailed(targetGid, sub.id, sub.name)
+                                            totalNew += res.addedCount
+                                            totalMetaUpdated += res.metadataUpdatedCount
                                         }
                                         isSyncingGDrive = false
                                         withContext(Dispatchers.Main) {
-                                            if (totalNew > 0) {
-                                                Toast.makeText(this@MainActivity, "雲端同步完成！新增 $totalNew 首檔案並分類存入各清單", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                Toast.makeText(this@MainActivity, "已是最新狀態，無新增雲端檔案", Toast.LENGTH_SHORT).show()
+                                            val msg = when {
+                                                totalNew > 0 && totalMetaUpdated > 0 ->
+                                                    "雲端同步完成！新增 $totalNew 首曲目並綁定 $totalMetaUpdated 首歌詞/封面"
+                                                totalNew > 0 ->
+                                                    "雲端同步完成！新增 $totalNew 首檔案並分類存入各清單"
+                                                totalMetaUpdated > 0 ->
+                                                    "✨ 已為 $totalMetaUpdated 首現有曲目綁定雲端歌詞或封面！"
+                                                else ->
+                                                    "已是最新狀態，無新增雲端檔案"
                                             }
+                                            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 },
