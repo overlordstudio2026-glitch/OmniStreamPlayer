@@ -72,12 +72,17 @@ fun WavySeekBar(
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = { offset ->
-                        val ratio = (offset.x / size.width).coerceIn(0f, 1f)
-                        dragProgress = ratio
-                        isDragging = true
-                        tryAwaitRelease()
-                        onSeek(dragProgress)
-                        isDragging = false
+                        try {
+                            val ratio = (offset.x / size.width).coerceIn(0f, 1f)
+                            dragProgress = ratio
+                            isDragging = true
+                            val success = tryAwaitRelease()
+                            if (success) {
+                                onSeek(dragProgress)
+                            }
+                        } finally {
+                            isDragging = false
+                        }
                     }
                 )
             }
@@ -92,8 +97,11 @@ fun WavySeekBar(
                         dragProgress = (change.position.x / size.width).coerceIn(0f, 1f)
                     },
                     onDragEnd = {
-                        onSeek(dragProgress)
-                        isDragging = false
+                        try {
+                            onSeek(dragProgress)
+                        } finally {
+                            isDragging = false
+                        }
                     },
                     onDragCancel = {
                         isDragging = false

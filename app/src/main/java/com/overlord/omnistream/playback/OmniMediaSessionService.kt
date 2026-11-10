@@ -258,6 +258,17 @@ class OmniMediaSessionService : MediaSessionService() {
                 prefetchUpcomingYouTubeItems()
             }
 
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int
+            ) {
+                // 使用者手動 Seek 時，重設淡化狀態與音量避免卡死
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                    crossfadeManager.cancelFadeAndResetVolume(1.0f)
+                }
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 saveCurrentPlaybackProgress()
                 updateLocks()
@@ -265,6 +276,7 @@ class OmniMediaSessionService : MediaSessionService() {
                     startProgressTracker()
                     prefetchUpcomingYouTubeItems()
                 } else {
+                    crossfadeManager.cancelFadeAndResetVolume(1.0f)
                     progressTrackerJob?.cancel()
                 }
             }
@@ -297,6 +309,7 @@ class OmniMediaSessionService : MediaSessionService() {
 
             override fun onPlayerError(error: PlaybackException) {
                 android.util.Log.w("OmniSessionService", "Player error: ${error.errorCodeName}, attempting recovery or skip...", error)
+                crossfadeManager.cancelFadeAndResetVolume(1.0f)
                 val currentItem = exoPlayer.currentMediaItem ?: return
                 val currentId = currentItem.mediaId
 

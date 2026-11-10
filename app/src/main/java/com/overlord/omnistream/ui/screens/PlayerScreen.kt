@@ -64,15 +64,30 @@ fun PlayerScreen(
     // 當前曲目切換時，自動非同步抓取動態同步歌詞 (LRCLIB)
     LaunchedEffect(currentMediaItem?.mediaId) {
         val item = currentMediaItem
-        if (item != null) {
+        val targetId = item?.mediaId
+        if (item != null && !targetId.isNullOrBlank()) {
             isLoadingLyrics = true
-            val durSec = if (durationMs > 0L) (durationMs / 1000L) else 0L
-            val t = title.ifEmpty { item.mediaMetadata.title?.toString() ?: "" }
-            val a = artist.ifEmpty { item.mediaMetadata.artist?.toString() ?: "" }
-            lyricsList = app.lyricsManager.fetchLyrics(item.mediaId, t, a, durSec)
-            isLoadingLyrics = false
+            try {
+                val durSec = if (durationMs > 0L) (durationMs / 1000L) else 0L
+                val t = title.ifEmpty { item.mediaMetadata.title?.toString() ?: "" }
+                val a = artist.ifEmpty { item.mediaMetadata.artist?.toString() ?: "" }
+                val fetched = app.lyricsManager.fetchLyrics(targetId, t, a, durSec)
+                // 嚴格比對：防止快速切歌時前一首的延遲請求覆蓋當前歌曲歌詞
+                if (currentMediaItem?.mediaId == targetId) {
+                    lyricsList = fetched
+                }
+            } catch (e: Throwable) {
+                if (currentMediaItem?.mediaId == targetId) {
+                    lyricsList = emptyList()
+                }
+            } finally {
+                if (currentMediaItem?.mediaId == targetId) {
+                    isLoadingLyrics = false
+                }
+            }
         } else {
             lyricsList = emptyList()
+            isLoadingLyrics = false
         }
     }
 

@@ -26,8 +26,25 @@ class CrossfadeManager(
         }
 
         val remainingMs = durationMs - currentPositionMs
-        if (remainingMs in 1..crossfadeDurationMs && !isFadingOut) {
-            startFadeOut(remainingMs)
+        if (remainingMs in 1..crossfadeDurationMs) {
+            if (!isFadingOut) {
+                startFadeOut(remainingMs)
+            }
+        } else if (isFadingOut && remainingMs > crossfadeDurationMs) {
+            // 使用者手動快退或 Seek 至淡化區間外，立即取消淡出並將音量重設至正常滿格
+            cancelFadeAndResetVolume(1.0f)
+        }
+    }
+
+    /**
+     * 當使用者手動 Seek、暫停或強制跳轉時，取消正在進行的淡入淡出並恢復指定音量
+     */
+    fun cancelFadeAndResetVolume(targetVolume: Float = 1.0f) {
+        isFadingOut = false
+        crossfadeJob?.cancel()
+        crossfadeJob = null
+        if (::exoPlayer.isInitialized) {
+            exoPlayer.volume = targetVolume
         }
     }
 
