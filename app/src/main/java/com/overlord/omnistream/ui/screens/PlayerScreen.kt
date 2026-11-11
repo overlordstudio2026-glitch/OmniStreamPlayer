@@ -323,6 +323,15 @@ fun PlayerScreen(
                                 )
                             }
                         } else {
+                            val diagMsg = remember(activeMediaId, effectiveLyricsUri, lyricsList) {
+                                val err = activeMediaId?.let { app.lyricsManager.getLastError(it) }
+                                when {
+                                    !err.isNullOrBlank() -> "⚠️ $err"
+                                    activeMediaId?.startsWith("gdrive_") == true && effectiveLyricsUri.isNullOrBlank() ->
+                                        "尚未配對到雲端字幕檔\n請返回清單點擊右上角「🔄 同步雲端」取得最新字幕"
+                                    else -> null
+                                }
+                            }
                             LyricsView(
                                 lyrics = if (isTapSyncMode) tapSyncDraft else lyricsList,
                                 currentPositionMs = currentPosMs,
@@ -332,7 +341,8 @@ fun PlayerScreen(
                                 autoScrollEnabled = autoScrollEnabled,
                                 isTapSyncMode = isTapSyncMode,
                                 tapSyncTargetIndex = tapSyncTargetIndex,
-                                onSelectTapSyncLine = { tapSyncTargetIndex = it }
+                                onSelectTapSyncLine = { tapSyncTargetIndex = it },
+                                emptyDiagnosticMessage = diagMsg
                             )
 
                             // 歌詞底部懸浮調校控制列（±0.5s 偏移記憶 + 跟隨鎖定 + 邊聽邊打軸 + 換詞搜尋）

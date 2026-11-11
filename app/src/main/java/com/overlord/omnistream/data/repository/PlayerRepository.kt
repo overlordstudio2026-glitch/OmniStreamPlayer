@@ -112,42 +112,70 @@ class PlayerRepository(
         val remoteFiles = gdriveService.fetchFolderAudioFiles(folderId, folderName)
         if (remoteFiles.isEmpty()) return@withContext SyncFolderResult(0, 0)
 
-        val existingEntities = playlistDao.getByGroup(groupId)
-        val existingMap = existingEntities.associateBy { it.id }.toMutableMap()
+        // 先取得全域所有已存在曲目（防止曲目曾被手動移至其他自訂清單而漏掉更新或誤搬回預設清單）
+        val allExistingEntities = playlistDao.getAll()
+        val globalMap = allExistingEntities.associateBy { it.id }
+
+        val targetGroupEntities = allExistingEntities.filter { it.playlistGroupId == groupId }
+        val targetGroupMap = targetGroupEntities.associateBy { it.id }.toMutableMap()
+        val crossGroupUpdates = mutableListOf<PlaylistItemEntity>()
+
         var newCount = 0
         var metadataUpdatedCount = 0
 
-        // 檢查並加入新檔案，並對既有曲目同步最新配對的歌詞與封面網址
         for (file in remoteFiles) {
-            val existing = existingMap[file.id]
-            if (existing == null) {
-                val newEntity = PlaylistItemEntity.fromDomain(file, 0, groupId)
-                existingMap[file.id] = newEntity
-                newCount++
-            } else {
-                val updatedLyrics = if (!file.lyricsUri.isNullOrBlank()) file.lyricsUri else existing.lyricsUri
-                val updatedArt = if (!file.artworkUri.isNullOrBlank()) file.artworkUri else existing.artworkUri
-                if (updatedLyrics != existing.lyricsUri || updatedArt != existing.artworkUri) {
-                    existingMap[file.id] = existing.copy(
-                        lyricsUri = updatedLyrics,
-                        artworkUri = updatedArt
-                    )
-                    metadataUpdatedCount++
+            val existingInGroup = targetGroupMap[file.id]
+            val existingGlobal = globalMap[file.id]
+
+            when {
+                existingInGroup != null -> {
+                    val updatedLyrics = if (!file.lyricsUri.isNullOrBlank()) file.lyricsUri else existingInGroup.lyricsUri
+                    val updatedArt = if (!file.artworkUri.isNullOrBlank()) file.artworkUri else existingInGroup.artworkUri
+                    if (updatedLyrics != existingInGroup.lyricsUri || updatedArt != existingInGroup.artworkUri) {
+                        targetGroupMap[file.id] = existingInGroup.copy(
+                            lyricsUri = updatedLyrics,
+                            artworkUri = updatedArt
+                        )
+                        metadataUpdatedCount++
+                    }
+                }
+                existingGlobal != null -> {
+                    // 曲目已存在於使用者移入的其他清單：就地同步歌詞與封面，保留原歸屬群組
+                    val updatedLyrics = if (!file.lyricsUri.isNullOrBlank()) file.lyricsUri else existingGlobal.lyricsUri
+                    val updatedArt = if (!file.artworkUri.isNullOrBlank()) file.artworkUri else existingGlobal.artworkUri
+                    if (updatedLyrics != existingGlobal.lyricsUri || updatedArt != existingGlobal.artworkUri) {
+                        crossGroupUpdates.add(
+                            existingGlobal.copy(
+                                lyricsUri = updatedLyrics,
+                                artworkUri = updatedArt
+                            )
+                        )
+                        metadataUpdatedCount++
+                    }
+                }
+                else -> {
+                    val newEntity = PlaylistItemEntity.fromDomain(file, 0, groupId)
+                    targetGroupMap[file.id] = newEntity
+                    newCount++
                 }
             }
         }
 
-        // 對現有群組內所有項目（包含既有的其他項目與新加入的項目）重新進行自然排序
-        val allItems = existingMap.values.toList()
+        // 對目標群組內所有項目重新自然排序
+        val allItems = targetGroupMap.values.toList()
         val sortedList = allItems.sortedWith { a, b ->
             GoogleDriveService.naturalCompare(a.title, b.title)
         }
-
         val reorderedEntities = sortedList.mapIndexed { index, entity ->
             entity.copy(sortOrder = index + 1)
         }
 
-        playlistDao.insertAll(reorderedEntities)
+        if (reorderedEntities.isNotEmpty()) {
+            playlistDao.insertAll(reorderedEntities)
+        }
+        if (crossGroupUpdates.isNotEmpty()) {
+            playlistDao.insertAll(crossGroupUpdates)
+        }
         backupManager.createBackup()
         return@withContext SyncFolderResult(newCount, metadataUpdatedCount)
     }

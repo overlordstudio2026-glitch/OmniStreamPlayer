@@ -39,7 +39,8 @@ fun LyricsView(
     autoScrollEnabled: Boolean = true,
     isTapSyncMode: Boolean = false,
     tapSyncTargetIndex: Int = 0,
-    onSelectTapSyncLine: (Int) -> Unit = {}
+    onSelectTapSyncLine: (Int) -> Unit = {},
+    emptyDiagnosticMessage: String? = null
 ) {
     if (lyrics.isEmpty()) {
         Box(
@@ -47,8 +48,9 @@ fun LyricsView(
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = "♫ 無同步歌詞 / 可點下方「換詞」搜尋其他版本",
-                color = TextSecondary.copy(alpha = 0.7f),
+                text = emptyDiagnosticMessage?.takeIf { it.isNotBlank() }
+                    ?: "♫ 無同步歌詞 / 可點下方「換詞」搜尋其他版本",
+                color = TextSecondary.copy(alpha = 0.78f),
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 24.dp)

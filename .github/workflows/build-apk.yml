@@ -30,7 +30,8 @@ jobs:
 
       - name: Run Automated JVM Unit Tests
         run: |
-          gradle testDebugUnitTest --info 2>&1 | tee test.log || true
+          set -o pipefail
+          gradle testDebugUnitTest --info 2>&1 | tee test.log
 
       - name: Upload Test Report
         if: always()

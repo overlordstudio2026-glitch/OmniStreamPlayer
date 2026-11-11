@@ -22,11 +22,13 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
     companion object {
         internal const val PUBLIC_DRIVE_API_KEY = "AIzaSyAWGrfCCr7albM3lmCc937gx4uIphbpeKQ"
         private val FOLDER_ID_PATTERN = Pattern.compile("(?:folders/|[?&]id=)([a-zA-Z0-9_-]{25,})")
-        private val LYRIC_EXTENSIONS = listOf(".lrc", ".srt", ".txt")
-        private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".webp")
+        internal val AUDIO_EXTENSIONS = listOf(".mp3", ".m4a", ".wav", ".aac", ".ogg", ".flac", ".opus", ".webm")
+        internal val LYRIC_EXTENSIONS = listOf(".lrc", ".srt", ".vtt", ".ass", ".ssa", ".txt")
+        internal val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".webp")
+        private const val GDOC_MIME = "application/vnd.google-apps.document"
 
         /**
-         * 資料夾內輔助檔案 (歌詞、封面圖片)
+         * 資料夾內輔助檔案 (歌詞、字幕、封面圖片)
          */
         data class SidecarFile(
             val id: String,
@@ -35,21 +37,48 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
         )
 
         /**
-         * 將檔名核心正規化以便跨命名格式模糊比對（如去除 _歌詞、_20260929、_Fin、_OK、全形底線＿ 與空白）
+         * 判斷是否為支援的歌詞或字幕副檔名
          */
-        private fun normalizeCoreKey(rawTitle: String): String {
-            return rawTitle.substringBeforeLast(".")
+        fun isLyricOrSubtitleFile(fileName: String, mimeType: String = ""): Boolean {
+            val lower = fileName.trim().lowercase()
+            if (LYRIC_EXTENSIONS.any { lower.endsWith(it) }) return true
+            if (mimeType == GDOC_MIME && (lower.contains("歌詞") || lower.contains("字幕") || lower.contains("lyric") || lower.contains("sub"))) {
+                return true
+            }
+            return false
+        }
+
+        /**
+         * 僅移除已知媒體/字幕副檔名，避免誤切標題本身的小數點 (如 "v1.0")
+         */
+        private fun stripKnownExtension(rawTitle: String): String {
+            val trimmed = rawTitle.trim()
+            val lower = trimmed.lowercase()
+            val allKnown = AUDIO_EXTENSIONS + LYRIC_EXTENSIONS + IMAGE_EXTENSIONS + listOf(".md")
+            for (ext in allKnown) {
+                if (lower.endsWith(ext)) {
+                    return trimmed.substring(0, trimmed.length - ext.length)
+                }
+            }
+            return trimmed
+        }
+
+        /**
+         * 將檔名核心正規化以便跨命名格式模糊比對（如去除 _audio、_歌詞、_字幕、_20260929、_Fin、_OK、全形底線＿ 與空白）
+         */
+        internal fun normalizeCoreKey(rawTitle: String): String {
+            return stripKnownExtension(rawTitle)
                 .replace('＿', '_')
                 .replace('\u3000', ' ')
-                .replace(Regex("(?i)(_歌詞|_lyrics|_fin|_ok|_final|_日文版)"), "")
+                .replace(Regex("(?i)(_audio|audio_|_音訊|_歌詞|_lyrics|_lyric|_字幕|_subtitle|_sub|_cht|_chs|_zh|_tw|_fin|_ok|_final|_日文版)"), "")
                 .replace(Regex("_\\d{6,10}"), "")
                 .replace(Regex("_\\d{4}"), "")
-                .replace(Regex("[\\s_()（）【】\\[\\]]+"), "")
+                .replace(Regex("[\\s_()（）【】\\[\\].-]+"), "")
                 .lowercase()
         }
 
         /**
-         * 智慧配對音訊曲目的同資料夾歌詞檔與封面圖（支援 .lrc > .srt > .txt 優先序）
+         * 智慧配對音訊曲目的同資料夾歌詞/字幕檔與封面圖（支援 .lrc > .srt > .vtt > .ass > .txt 優先序）
          */
         fun attachMatchingSidecars(
             audioItems: MutableList<PlaylistItem>,
@@ -60,34 +89,37 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
 
             for (i in audioItems.indices) {
                 val item = audioItems[i]
-                val rawBase = item.title.trim()
+                val rawBase = stripKnownExtension(item.title)
                 val coreKey = normalizeCoreKey(rawBase)
                 val numPrefix = Regex("^(\\d{1,3})[_\\s-]").find(rawBase)?.groupValues?.get(1)
 
                 var matchedLyricUri = item.lyricsUri
-                if (matchedLyricUri.isNullOrBlank() && lyricFiles.isNotEmpty()) {
+                if (lyricFiles.isNotEmpty()) {
                     val bestLyric = lyricFiles.maxByOrNull { cand ->
-                        val candBase = cand.name.substringBeforeLast(".").trim()
+                        val candBase = stripKnownExtension(cand.name)
                         val candCore = normalizeCoreKey(candBase)
+                        val lowerName = cand.name.lowercase()
                         val extScore = when {
-                            cand.name.endsWith(".lrc", ignoreCase = true) -> 30
-                            cand.name.endsWith(".srt", ignoreCase = true) -> 20
-                            else -> 10
+                            lowerName.endsWith(".lrc") -> 60
+                            lowerName.endsWith(".srt") -> 50
+                            lowerName.endsWith(".vtt") -> 45
+                            lowerName.endsWith(".ass") || lowerName.endsWith(".ssa") -> 40
+                            else -> 20
                         }
                         val matchScore = when {
                             candBase.equals(rawBase, ignoreCase = true) -> 1000
                             candCore.isNotBlank() && candCore == coreKey -> 500
-                            candCore.isNotBlank() && (coreKey.contains(candCore) || candCore.contains(coreKey)) -> 300
+                            candCore.isNotBlank() && coreKey.isNotBlank() && (coreKey.contains(candCore) || candCore.contains(coreKey)) -> 300
                             numPrefix != null && candBase.startsWith("${numPrefix}_") -> 200
                             else -> 0
                         }
                         if (matchScore > 0) matchScore + extScore else -1
                     }
                     if (bestLyric != null) {
-                        val candBase = bestLyric.name.substringBeforeLast(".").trim()
+                        val candBase = stripKnownExtension(bestLyric.name)
                         val candCore = normalizeCoreKey(candBase)
                         val isHit = candBase.equals(rawBase, ignoreCase = true) ||
-                            (candCore.isNotBlank() && (candCore == coreKey || coreKey.contains(candCore) || candCore.contains(coreKey))) ||
+                            (candCore.isNotBlank() && coreKey.isNotBlank() && (candCore == coreKey || coreKey.contains(candCore) || candCore.contains(coreKey))) ||
                             (numPrefix != null && candBase.startsWith("${numPrefix}_"))
                         if (isHit) {
                             matchedLyricUri = bestLyric.downloadUri
@@ -98,12 +130,12 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
                 var matchedArtUri = item.artworkUri
                 if (matchedArtUri.isNullOrBlank() && imageFiles.isNotEmpty()) {
                     val exactImg = imageFiles.firstOrNull {
-                        it.name.substringBeforeLast(".").equals(rawBase, ignoreCase = true)
+                        stripKnownExtension(it.name).equals(rawBase, ignoreCase = true)
                     } ?: imageFiles.firstOrNull {
                         val c = normalizeCoreKey(it.name)
                         c.isNotBlank() && c == coreKey
                     } ?: imageFiles.firstOrNull {
-                        val base = it.name.substringBeforeLast(".").lowercase()
+                        val base = stripKnownExtension(it.name).lowercase()
                         base == "cover" || base == "folder" || base == "artwork"
                     }
                     if (exactImg != null) {
@@ -121,15 +153,14 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
         }
 
         /**
-          * 從完整網址或純文字中精準提取 Google Drive Folder ID
-          */
+         * 從完整網址或純文字中精準提取 Google Drive Folder ID
+         */
         fun extractFolderId(input: String): String {
             val trimmed = input.trim()
             val matcher = FOLDER_ID_PATTERN.matcher(trimmed)
             return if (matcher.find()) {
                 matcher.group(1) ?: matcher.group()
             } else {
-                // 若本身為純 ID
                 trimmed.substringBefore("?").substringBefore("&")
             }
         }
@@ -164,10 +195,19 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
         return "https://drive.google.com/uc?export=download&id=$fileId"
     }
 
+    private fun buildSidecarDownloadUrl(fileId: String, mimeType: String, token: String?): String {
+        if (mimeType == GDOC_MIME) {
+            return "https://docs.google.com/document/d/$fileId/export?format=txt"
+        }
+        return if (token != null) {
+            "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
+        } else {
+            buildPublicStreamUrl(fileId)
+        }
+    }
+
     /**
      * 嘗試解析 Google Drive 資料夾的真實名稱
-     * 1. 優先透過 Drive v3 API 獲取資料夾 metadata
-     * 2. 備援透過公開資料夾 HTML 解析 og:title 或 title
      */
     suspend fun fetchFolderName(folderIdOrUrl: String): String? = withContext(Dispatchers.IO) {
         val folderId = extractFolderId(folderIdOrUrl)
@@ -230,7 +270,7 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
     }
 
     /**
-     * 抓取 Google Drive 指定資料夾內音訊檔案（支援 1000+ 首全量分頁與公開/私有資料夾）
+     * 抓取 Google Drive 指定資料夾內音訊檔案與對應字幕/歌詞/封面（支援 Drive v3 API 與免登入公開網頁雙軌備援）
      */
     suspend fun fetchFolderAudioFiles(
         folderIdOrUrl: String,
@@ -239,12 +279,62 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
         val folderId = extractFolderId(folderIdOrUrl)
         val token = currentAccessToken
 
-        // 優先使用 Drive v3 API（支援分頁循環與 pageSize=1000，一次拉取全量檔案）
+        // 1. 優先使用 Drive v3 API（支援分頁循環與 pageSize=1000）
         val apiFiles = fetchViaDriveV3Api(folderId, folderName, token)
         if (apiFiles.isNotEmpty()) return@withContext apiFiles
 
-        // 備用方案：免登入公開資料夾網頁解析器
+        // 2. 備用方案：免登入公開資料夾網頁解析器
         return@withContext fetchPublicFolderAudioFiles(folderId, folderName)
+    }
+
+    internal fun parseDriveV3ResponseJson(
+        body: String,
+        folderId: String,
+        folderName: String,
+        token: String?,
+        result: MutableList<PlaylistItem>,
+        lyricFiles: MutableList<SidecarFile>,
+        imageFiles: MutableList<SidecarFile>
+    ): String? {
+        val json = JSONObject(body)
+        val files = json.optJSONArray("files") ?: return null
+        for (i in 0 until files.length()) {
+            val file = files.getJSONObject(i)
+            val id = file.optString("id")
+            val name = file.optString("name")
+            val mimeType = file.optString("mimeType", "")
+            if (id.isBlank() || name.isBlank()) continue
+
+            val isAudio = mimeType.startsWith("audio/") ||
+                AUDIO_EXTENSIONS.any { name.endsWith(it, ignoreCase = true) }
+
+            when {
+                isAudio -> {
+                    val mediaUri = if (token != null) {
+                        "https://www.googleapis.com/drive/v3/files/$id?alt=media"
+                    } else {
+                        buildPublicStreamUrl(id)
+                    }
+                    result.add(
+                        PlaylistItem(
+                            id = "gdrive_$id",
+                            title = stripKnownExtension(name),
+                            artist = folderName,
+                            mediaUri = mediaUri,
+                            sourceType = MediaSourceType.GDRIVE,
+                            driveFolderId = folderId
+                        )
+                    )
+                }
+                isLyricOrSubtitleFile(name, mimeType) -> {
+                    lyricFiles.add(SidecarFile(id, name, buildSidecarDownloadUrl(id, mimeType, token)))
+                }
+                IMAGE_EXTENSIONS.any { name.endsWith(it, ignoreCase = true) } || mimeType.startsWith("image/") -> {
+                    imageFiles.add(SidecarFile(id, name, buildSidecarDownloadUrl(id, mimeType, token)))
+                }
+            }
+        }
+        return json.optString("nextPageToken").takeIf { it.isNotBlank() }
     }
 
     private fun fetchViaDriveV3Api(
@@ -256,7 +346,6 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
         val result = mutableListOf<PlaylistItem>()
         val lyricFiles = mutableListOf<SidecarFile>()
         val imageFiles = mutableListOf<SidecarFile>()
-        val audioExtensions = listOf(".mp3", ".m4a", ".wav", ".aac", ".ogg", ".flac", ".opus", ".webm")
         var pageToken: String? = null
         val query = "'$folderId' in parents and trashed = false"
 
@@ -268,12 +357,9 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
             httpUrlBuilder.addQueryParameter("fields", "nextPageToken,files(id,name,mimeType,size)")
             httpUrlBuilder.addQueryParameter("orderBy", "name asc")
 
-            if (token != null) {
-                // 有 OAuth token 優先透過 Bearer Header 驗證
-            } else {
+            if (token == null) {
                 httpUrlBuilder.addQueryParameter("key", apiKey)
             }
-
             if (pageToken != null) {
                 httpUrlBuilder.addQueryParameter("pageToken", pageToken)
             }
@@ -289,53 +375,13 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
                 if (!response.isSuccessful) {
                     break
                 }
-                val json = JSONObject(body)
-                val files = json.optJSONArray("files") ?: break
-                for (i in 0 until files.length()) {
-                    val file = files.getJSONObject(i)
-                    val id = file.optString("id")
-                    val name = file.optString("name")
-                    val mimeType = file.optString("mimeType", "")
-                    if (id.isBlank()) continue
-
-                    val downloadUri = if (token != null) {
-                        "https://www.googleapis.com/drive/v3/files/$id?alt=media"
-                    } else {
-                        buildPublicStreamUrl(id)
-                    }
-
-                    val isAudio = mimeType.startsWith("audio/") ||
-                            audioExtensions.any { name.endsWith(it, ignoreCase = true) }
-
-                    when {
-                        isAudio -> {
-                            result.add(
-                                PlaylistItem(
-                                    id = "gdrive_$id",
-                                    title = name.substringBeforeLast("."),
-                                    artist = folderName,
-                                    mediaUri = downloadUri,
-                                    sourceType = MediaSourceType.GDRIVE,
-                                    driveFolderId = folderId
-                                )
-                            )
-                        }
-                        LYRIC_EXTENSIONS.any { name.endsWith(it, ignoreCase = true) } -> {
-                            lyricFiles.add(SidecarFile(id, name, downloadUri))
-                        }
-                        IMAGE_EXTENSIONS.any { name.endsWith(it, ignoreCase = true) } || mimeType.startsWith("image/") -> {
-                            imageFiles.add(SidecarFile(id, name, downloadUri))
-                        }
-                    }
-                }
-                pageToken = json.optString("nextPageToken").takeIf { it.isNotBlank() }
+                pageToken = parseDriveV3ResponseJson(body, folderId, folderName, token, result, lyricFiles, imageFiles)
             } catch (e: Exception) {
                 e.printStackTrace()
                 break
             }
         } while (pageToken != null)
 
-        // 自然排序並自動配對同資料夾歌詞 (.lrc/.srt/.txt) 與封面圖
         result.sortWith { a, b -> naturalCompare(a.title, b.title) }
         attachMatchingSidecars(result, lyricFiles, imageFiles)
         return result
@@ -361,68 +407,92 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
         try {
             val response = client.newCall(request).execute()
             val html = response.body?.string() ?: return@withContext emptyList()
-
-            // 1. 嘗試由 window['_DRIVE_ivd'] 提取檔案列表 (含音訊、歌詞與圖片)
-            val ivdPattern = Pattern.compile("""window\['_DRIVE_ivd'\]\s*=\s*'([^']+)'""")
-            val ivdMatcher = ivdPattern.matcher(html)
-            if (ivdMatcher.find()) {
-                val rawEscaped = ivdMatcher.group(1)
-                val decoded = unescapeUnicode(rawEscaped)
-                try {
-                    val root = JSONArray(decoded)
-                    extractFilesFromJson(root, folderId, folderName, result, lyricFiles, imageFiles)
-                    if (result.isNotEmpty()) {
-                        result.sortWith { a, b -> naturalCompare(a.title, b.title) }
-                        attachMatchingSidecars(result, lyricFiles, imageFiles)
-                        return@withContext result
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-
-            // 2. 備用方案：透過 DOM data-id 與 tooltip 標籤提取（相容檔名後面帶有 " Audio"、" 文字" 等類型後綴）
-            val fallbackPattern = Pattern.compile("""data-id="([a-zA-Z0-9_-]{25,})"[^>]*data-tooltip="([^"]+\.(?:mp3|m4a|wav|aac|ogg|flac|opus|webm|lrc|srt|txt|jpg|jpeg|png|webp))(?:\s+[^"]*)?"""")
-            val matcher = fallbackPattern.matcher(html)
-            val seenIds = mutableSetOf<String>()
-            while (matcher.find()) {
-                val fileId = matcher.group(1)
-                val fileName = matcher.group(2)
-                if (seenIds.add(fileId)) {
-                    val dl = buildPublicStreamUrl(fileId)
-                    when {
-                        LYRIC_EXTENSIONS.any { fileName.endsWith(it, ignoreCase = true) } -> {
-                            lyricFiles.add(SidecarFile(fileId, fileName, dl))
-                        }
-                        IMAGE_EXTENSIONS.any { fileName.endsWith(it, ignoreCase = true) } -> {
-                            imageFiles.add(SidecarFile(fileId, fileName, dl))
-                        }
-                        else -> {
-                            result.add(
-                                PlaylistItem(
-                                    id = "gdrive_$fileId",
-                                    title = fileName.substringBeforeLast("."),
-                                    artist = folderName,
-                                    mediaUri = dl,
-                                    sourceType = MediaSourceType.GDRIVE,
-                                    driveFolderId = folderId
-                                )
-                            )
-                        }
-                    }
-                }
-            }
+            parsePublicHtmlFolder(html, folderId, folderName, result, lyricFiles, imageFiles)
         } catch (e: Exception) {
             e.printStackTrace()
         }
 
-        // 自然排序並關聯歌詞與封面
         result.sortWith { a, b -> naturalCompare(a.title, b.title) }
         attachMatchingSidecars(result, lyricFiles, imageFiles)
         return@withContext result
     }
 
-    private fun extractFilesFromJson(
+    internal fun parsePublicHtmlFolder(
+        html: String,
+        folderId: String,
+        folderName: String,
+        result: MutableList<PlaylistItem>,
+        lyricFiles: MutableList<SidecarFile>,
+        imageFiles: MutableList<SidecarFile>
+    ) {
+        // 1. 優先由 window['_DRIVE_ivd'] 提取完整結構化檔案列表
+        val ivdPattern = Pattern.compile("""window\['_DRIVE_ivd'\]\s*=\s*'([^']+)'""")
+        val ivdMatcher = ivdPattern.matcher(html)
+        if (ivdMatcher.find()) {
+            val rawEscaped = ivdMatcher.group(1)
+            val decoded = unescapeJsString(rawEscaped)
+            try {
+                val root = JSONArray(decoded)
+                extractFilesFromJson(root, folderId, folderName, result, lyricFiles, imageFiles)
+                if (result.isNotEmpty()) {
+                    return
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        // 2. DOM 備援掃描（允許屬性間跨標籤與類型標籤後綴如 " Audio", " Text", " 文字"）
+        val idPattern = Pattern.compile("""data-id="([a-zA-Z0-9_-]{25,})"""")
+        val namePattern = Pattern.compile("""(?:data-tooltip|aria-label)="([^"]+)"""")
+        val idMatcher = idPattern.matcher(html)
+        val seenIds = mutableSetOf<String>()
+
+        while (idMatcher.find()) {
+            val fileId = idMatcher.group(1) ?: continue
+            if (fileId == folderId || !seenIds.add(fileId)) continue
+
+            val searchEnd = (idMatcher.end() + 700).coerceAtMost(html.length)
+            val snippet = html.substring(idMatcher.end(), searchEnd)
+            val nameMatcher = namePattern.matcher(snippet)
+            while (nameMatcher.find()) {
+                val rawTooltip = nameMatcher.group(1)?.trim() ?: continue
+                // 移除 Google Drive DOM 附加的類型尾綴 (如 "foo.mp3 Audio", "bar.lrc 文字", "baz.srt Text")
+                val cleanedName = rawTooltip.replace(
+                    Regex("""\s+(Audio|Video|Text|Document|Image|音訊|影片|文字|圖片|檔案)\s*$""", RegexOption.IGNORE_CASE),
+                    ""
+                ).trim()
+
+                val dl = buildPublicStreamUrl(fileId)
+                val isAudio = AUDIO_EXTENSIONS.any { cleanedName.endsWith(it, ignoreCase = true) }
+                when {
+                    isAudio -> {
+                        result.add(
+                            PlaylistItem(
+                                id = "gdrive_$fileId",
+                                title = stripKnownExtension(cleanedName),
+                                artist = folderName,
+                                mediaUri = dl,
+                                sourceType = MediaSourceType.GDRIVE,
+                                driveFolderId = folderId
+                            )
+                        )
+                        break
+                    }
+                    isLyricOrSubtitleFile(cleanedName) -> {
+                        lyricFiles.add(SidecarFile(fileId, cleanedName, dl))
+                        break
+                    }
+                    IMAGE_EXTENSIONS.any { cleanedName.endsWith(it, ignoreCase = true) } -> {
+                        imageFiles.add(SidecarFile(fileId, cleanedName, dl))
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    internal fun extractFilesFromJson(
         node: Any?,
         folderId: String,
         folderName: String,
@@ -433,29 +503,28 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
         when (node) {
             is JSONArray -> {
                 if (node.length() >= 4) {
-                    val first = node.opt(0)
-                    val third = node.opt(2)
-                    val fourth = node.opt(3)
-                    if (first is String && third is String && fourth is String && first.length >= 25) {
+                    val first = node.opt(0) as? String
+                    val third = node.opt(2) as? String
+                    // Google Drive 對 .lrc / .srt 等自訂副檔名在網頁陣列中第 4 欄可能為 null，故不可強制要求 non-null String
+                    val fourth = node.opt(3) as? String ?: ""
+                    if (!first.isNullOrBlank() && !third.isNullOrBlank() && first.length >= 25) {
                         val isAudio = fourth.startsWith("audio/") ||
-                                third.endsWith(".mp3", ignoreCase = true) ||
-                                third.endsWith(".m4a", ignoreCase = true) ||
-                                third.endsWith(".wav", ignoreCase = true)
-                        val dl = buildPublicStreamUrl(first)
+                            AUDIO_EXTENSIONS.any { third.endsWith(it, ignoreCase = true) }
+                        val dl = buildSidecarDownloadUrl(first, fourth, null)
                         when {
                             isAudio -> {
                                 results.add(
                                     PlaylistItem(
                                         id = "gdrive_$first",
-                                        title = third.substringBeforeLast("."),
+                                        title = stripKnownExtension(third),
                                         artist = folderName,
-                                        mediaUri = dl,
+                                        mediaUri = buildPublicStreamUrl(first),
                                         sourceType = MediaSourceType.GDRIVE,
                                         driveFolderId = folderId
                                     )
                                 )
                             }
-                            LYRIC_EXTENSIONS.any { third.endsWith(it, ignoreCase = true) } -> {
+                            isLyricOrSubtitleFile(third, fourth) -> {
                                 lyricFiles.add(SidecarFile(first, third, dl))
                             }
                             IMAGE_EXTENSIONS.any { third.endsWith(it, ignoreCase = true) } || fourth.startsWith("image/") -> {
@@ -477,36 +546,44 @@ class GoogleDriveService(private val client: OkHttpClient = OkHttpClient()) {
         }
     }
 
-    private fun unescapeUnicode(input: String): String {
-        val sb = StringBuilder()
+    /**
+     * 安全解碼 Google Drive HTML <script> 內的 JS 單引號字串，保留合法 JSON 跳脫結構
+     */
+    internal fun unescapeJsString(input: String): String {
+        val sb = StringBuilder(input.length)
         var i = 0
         while (i < input.length) {
-            if (input[i] == '\\') {
-                if (i + 1 < input.length) {
-                    when (input[i + 1]) {
-                        'x' -> {
-                            if (i + 3 < input.length) {
-                                val hex = input.substring(i + 2, i + 4)
-                                sb.append(hex.toInt(16).toChar())
+            if (input[i] == '\\' && i + 1 < input.length) {
+                when (input[i + 1]) {
+                    'x' -> {
+                        if (i + 3 < input.length) {
+                            val hex = input.substring(i + 2, i + 4)
+                            val ch = hex.toIntOrNull(16)?.toChar()
+                            if (ch != null) {
+                                sb.append(ch)
                                 i += 4
                                 continue
                             }
                         }
-                        'u' -> {
-                            if (i + 5 < input.length) {
-                                val hex = input.substring(i + 2, i + 6)
-                                sb.append(hex.toInt(16).toChar())
+                    }
+                    'u' -> {
+                        if (i + 5 < input.length) {
+                            val hex = input.substring(i + 2, i + 6)
+                            val ch = hex.toIntOrNull(16)?.toChar()
+                            if (ch != null) {
+                                sb.append(ch)
                                 i += 6
                                 continue
                             }
                         }
-                        '/' -> { sb.append('/'); i += 2; continue }
-                        '"' -> { sb.append('"'); i += 2; continue }
-                        '\\' -> { sb.append('\\'); i += 2; continue }
-                        'n' -> { sb.append('\n'); i += 2; continue }
-                        'r' -> { sb.append('\r'); i += 2; continue }
-                        't' -> { sb.append('\t'); i += 2; continue }
                     }
+                    '/' -> { sb.append('/'); i += 2; continue }
+                    '\'' -> { sb.append('\''); i += 2; continue }
+                    '"' -> { sb.append('"'); i += 2; continue }
+                    '\\' -> { sb.append('\\'); i += 2; continue }
+                    'n' -> { sb.append('\n'); i += 2; continue }
+                    'r' -> { sb.append('\r'); i += 2; continue }
+                    't' -> { sb.append('\t'); i += 2; continue }
                 }
             }
             sb.append(input[i])
