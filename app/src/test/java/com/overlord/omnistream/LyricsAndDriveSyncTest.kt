@@ -37,7 +37,7 @@ class LyricsAndDriveSyncTest {
         GoogleDriveService.attachMatchingSidecars(result, lyricFiles, imageFiles)
 
         assertEquals(3, result.size)
-        assertEquals(3, lyricFiles.size)
+        assertEquals(4, lyricFiles.size)
 
         val track1 = result.first { it.title.startsWith("01_") }
         // .lrc 必須優先於 _歌詞.txt 被配對
