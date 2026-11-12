@@ -213,4 +213,48 @@ class LyricsAndDriveSyncTest {
         assertTrue(lines[0].text.contains("間奏"))
         assertTrue(lines.last().timestampMs in 60_000L..190_000L)
     }
+
+    @Test
+    fun testLyricsManagerSyncInvalidationAndForceRefreshWithSameUri() = runBlocking {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val uri = server.url("/uc?export=download&id=same_file_id_12345").toString()
+            server.enqueue(MockResponse().setResponseCode(200).setBody("[00:01.00]舊版雲端歌詞\n"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("[00:01.00]新版已更新雲端歌詞\n"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("[00:01.00]第三次強制重抓歌詞\n"))
+
+            val manager = LyricsManager()
+            val initialGen = manager.syncGeneration.value
+
+            // 1. 首次讀取舊版
+            val v1 = manager.fetchLyrics(cacheKey = "gdrive_same_1", trackTitle = "Test", lyricsUri = uri)
+            assertEquals("舊版雲端歌詞", v1.first().text)
+
+            // 2. 未同步時應命中記憶體快取（不會多打一次 HTTP）
+            val cached = manager.fetchLyrics(cacheKey = "gdrive_same_1", trackTitle = "Test", lyricsUri = uri)
+            assertEquals("舊版雲端歌詞", cached.first().text)
+            assertEquals(1, server.requestCount)
+
+            // 3. 模擬雲端資料夾同步完成 -> 清除快取並遞增 syncGeneration
+            manager.invalidateTracksForSync(listOf("gdrive_same_1"))
+            assertEquals(initialGen + 1L, manager.syncGeneration.value)
+
+            val v2 = manager.fetchLyrics(cacheKey = "gdrive_same_1", trackTitle = "Test", lyricsUri = uri)
+            assertEquals("新版已更新雲端歌詞", v2.first().text)
+            assertEquals(2, server.requestCount)
+
+            // 驗證 HTTP 請求帶有 no-cache Header，防止快取回傳舊檔
+            server.takeRequest() // req 1
+            val req2 = server.takeRequest()
+            assertTrue(req2.getHeader("Cache-Control")?.contains("no-cache") == true)
+
+            // 4. forceRefresh = true 應直接跳過記憶體快取重抓
+            val v3 = manager.fetchLyrics(cacheKey = "gdrive_same_1", trackTitle = "Test", lyricsUri = uri, forceRefresh = true)
+            assertEquals("第三次強制重抓歌詞", v3.first().text)
+            assertEquals(3, server.requestCount)
+        } finally {
+            server.shutdown()
+        }
+    }
 }

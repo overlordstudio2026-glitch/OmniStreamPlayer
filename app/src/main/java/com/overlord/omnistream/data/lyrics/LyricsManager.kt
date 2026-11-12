@@ -4,7 +4,11 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import okhttp3.CacheControl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -97,6 +101,8 @@ class LyricsManager(
 
     private val lyricsCache = ConcurrentHashMap<String, List<LyricLine>>()
     private val lastErrors = ConcurrentHashMap<String, String>()
+    private val _syncGeneration = MutableStateFlow(0L)
+    val syncGeneration: StateFlow<Long> = _syncGeneration.asStateFlow()
 
     fun getLastError(mediaId: String): String? = lastErrors[mediaId]
 
@@ -156,6 +162,19 @@ class LyricsManager(
     fun invalidateCache(mediaIdPrefix: String) {
         val keys = lyricsCache.keys.filter { it.startsWith("$mediaIdPrefix|") }
         keys.forEach { lyricsCache.remove(it) }
+        lastErrors.remove(mediaIdPrefix)
+    }
+
+    /**
+     * 當雲端資料夾同步完成時，清除該批曲目的歌詞記憶體快取並遞增同步世代，
+     * 讓正在播放中的畫面能立即重新抓取更新後的雲端字幕內容（即使 File ID 未變）。
+     */
+    fun invalidateTracksForSync(mediaIds: Collection<String>) {
+        if (mediaIds.isEmpty()) return
+        for (id in mediaIds) {
+            invalidateCache(id)
+        }
+        _syncGeneration.value = _syncGeneration.value + 1L
     }
 
     /**
@@ -168,9 +187,13 @@ class LyricsManager(
         durationSec: Long = 0L,
         lyricsUri: String? = null,
         accessToken: String? = null,
-        context: Context? = null
+        context: Context? = null,
+        forceRefresh: Boolean = false
     ): List<LyricLine> = withContext(Dispatchers.IO) {
         lastErrors.remove(cacheKey)
+        if (forceRefresh) {
+            invalidateCache(cacheKey)
+        }
 
         // 0. 最優先檢查使用者是否有親手打軸或選定的本機覆寫版本
         if (context != null) {
@@ -382,6 +405,8 @@ class LyricsManager(
         return try {
             val reqBuilder = Request.Builder()
                 .url(url)
+                .cacheControl(CacheControl.FORCE_NETWORK)
+                .addHeader("Cache-Control", "no-cache")
                 .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
             if (!accessToken.isNullOrBlank() && url.contains("googleapis.com")) {
                 reqBuilder.addHeader("Authorization", "Bearer $accessToken")

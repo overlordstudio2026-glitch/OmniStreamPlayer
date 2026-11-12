@@ -106,9 +106,10 @@ fun PlayerScreen(
     }.collectAsState(initial = null)
 
     val effectiveLyricsUri = dbItem?.lyricsUri ?: currentMediaItem?.mediaMetadata?.extras?.getString("LYRICS_URI")
+    val syncGeneration by app.lyricsManager.syncGeneration.collectAsState()
 
-    // 當前曲目切換、取得總時長、或資料庫剛同步新歌詞 URI 時，立即自動非同步抓取動態同步歌詞
-    LaunchedEffect(activeMediaId, effectiveLyricsUri, durationMs > 0L, lyricsReloadNonce) {
+    // 當前曲目切換、取得總時長、資料庫剛同步新歌詞 URI、或雲端同步完成時，立即自動非同步抓取動態同步歌詞
+    LaunchedEffect(activeMediaId, effectiveLyricsUri, durationMs > 0L, lyricsReloadNonce, syncGeneration) {
         val item = currentMediaItem
         val targetId = activeMediaId
         if (item != null && !targetId.isNullOrBlank()) {
@@ -504,6 +505,19 @@ fun PlayerScreen(
                                                 ) {
                                                     Text("打軸", color = AmberAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                                 }
+                                            }
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(CardDark)
+                                                    .clickable {
+                                                        activeMediaId?.let { app.lyricsManager.invalidateCache(it) }
+                                                        lyricsReloadNonce += 1
+                                                        Toast.makeText(context, "正在重新抓取雲端最新歌詞...", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                    .padding(horizontal = 7.dp, vertical = 4.dp)
+                                            ) {
+                                                Text("重抓", color = CyanAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                             }
                                             Box(
                                                 modifier = Modifier

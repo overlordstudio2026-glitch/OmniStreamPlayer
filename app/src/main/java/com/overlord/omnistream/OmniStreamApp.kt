@@ -27,7 +27,7 @@ class OmniStreamApp : Application(), ImageLoaderFactory {
     }
 
     val repository: PlayerRepository by lazy {
-        PlayerRepository(this, database)
+        PlayerRepository(this, database, lyricsManager)
     }
 
     val sponsorBlockManager: SponsorBlockManager by lazy {

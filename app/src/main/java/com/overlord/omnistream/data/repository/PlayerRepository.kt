@@ -11,6 +11,7 @@ import com.overlord.omnistream.data.local.entity.PlaybackStateEntity
 import com.overlord.omnistream.data.local.entity.PlaylistGroupEntity
 import com.overlord.omnistream.data.local.entity.PlaylistItemEntity
 import com.overlord.omnistream.data.local.entity.SubscriptionEntity
+import com.overlord.omnistream.data.lyrics.LyricsManager
 import com.overlord.omnistream.data.youtube.YouTubeAudioExtractor
 import com.overlord.omnistream.data.youtube.YouTubePlaylistParser
 import com.overlord.omnistream.data.youtube.YouTubeRssParser
@@ -24,7 +25,8 @@ import java.io.File
 
 class PlayerRepository(
     private val context: Context,
-    private val database: AppDatabase
+    private val database: AppDatabase,
+    private val lyricsManager: LyricsManager? = null
 ) {
 
     val gdriveService by lazy { GoogleDriveService() }
@@ -176,6 +178,7 @@ class PlayerRepository(
         if (crossGroupUpdates.isNotEmpty()) {
             playlistDao.insertAll(crossGroupUpdates)
         }
+        lyricsManager?.invalidateTracksForSync(remoteFiles.map { it.id })
         backupManager.createBackup()
         return@withContext SyncFolderResult(newCount, metadataUpdatedCount)
     }
